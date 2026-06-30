@@ -211,13 +211,17 @@ st.markdown(
 # =========================================================
 # DEFAULT VALUES AND SESSION STATE
 # =========================================================
+DEFAULTS = {
+    "started": False,
+    "step": 1,
+    "step1_confirmed": False,
+    "step2_confirmed": False,
+    "step3_confirmed": False,
+    "results_ready": False,
 
-# These are the default engineering input values displayed
-# automatically when the calculator is opened.
-INPUT_DEFAULTS = {
     # Cooling and ACH
-    "room_volume": 63.5,
-    "people": 6,
+    "room_volume": 63.0,
+    "people": 5,
     "heat_per_person": 100.0,
     "supply_temp": 12.0,
     "target_temp": 22.0,
@@ -225,7 +229,7 @@ INPUT_DEFAULTS = {
 
     # Richardson number
     "gravity": 9.81,
-    "alpha": 0.00340,
+    "alpha": 0.00335,
     "delta_t_ri": 5.0,
     "length_scale": 1.0,
     "air_velocity": 0.10,
@@ -238,49 +242,15 @@ INPUT_DEFAULTS = {
     "exposure_time": 2.0,
 }
 
-APP_DEFAULTS = {
-    "started": False,
-    "step": 1,
-    "step1_confirmed": False,
-    "step2_confirmed": False,
-    "step3_confirmed": False,
-    "results_ready": False,
-}
-
-DEFAULTS = {**APP_DEFAULTS, **INPUT_DEFAULTS}
-
-# Change this value whenever the programmed defaults are revised.
-# It ensures the updated defaults are loaded once, even when an older
-# Streamlit session still contains previous values.
-DEFAULTS_VERSION = "ATLICE_DEFAULTS_V2"
-
-if st.session_state.get("_defaults_version") != DEFAULTS_VERSION:
-    for key, value in DEFAULTS.items():
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
         st.session_state[key] = value
-    st.session_state["_defaults_version"] = DEFAULTS_VERSION
-else:
-    for key, value in DEFAULTS.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
 
 
 def reset_application():
     """Return the application to its original landing screen."""
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.rerun()
-
-
-def restore_default_inputs():
-    """Restore all engineering inputs without returning to the landing screen."""
-    for key, value in INPUT_DEFAULTS.items():
-        st.session_state[key] = value
-
-    st.session_state.step = 1
-    st.session_state.step1_confirmed = False
-    st.session_state.step2_confirmed = False
-    st.session_state.step3_confirmed = False
-    st.session_state.results_ready = False
     st.rerun()
 
 
@@ -424,7 +394,7 @@ if not st.session_state.started:
 # =========================================================
 # APPLICATION HEADER
 # =========================================================
-header_col1, header_col2, header_col3 = st.columns([4, 1.25, 1])
+header_col1, header_col2 = st.columns([5, 1])
 
 with header_col1:
     st.markdown('<div class="page-title">ATLICE</div>', unsafe_allow_html=True)
@@ -434,10 +404,6 @@ with header_col1:
     )
 
 with header_col2:
-    if st.button("Restore Defaults", use_container_width=True):
-        restore_default_inputs()
-
-with header_col3:
     if st.button("Start Again", use_container_width=True):
         reset_application()
 
