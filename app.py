@@ -1,7 +1,11 @@
 import math
 from datetime import datetime
+from io import BytesIO
 
+import matplotlib.pyplot as plt
 import streamlit as st
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Rectangle
 
 
 # =========================================================
@@ -288,6 +292,7 @@ apply_custom_css()
 # =========================================================
 PAGES = {
     "Home": "home",
+    "Occupancy Patterns": "occupancy",
     "Cooling & ACH": "ach",
     "Richardson Number": "ri",
     "Wells–Riley Risk": "wells_riley",
@@ -317,6 +322,11 @@ def render_sidebar() -> None:
 
         if st.button("⌂  ATLiCE Home", key="nav_home", use_container_width=True):
             go_to("home")
+
+        st.markdown("### Occupancy")
+
+        if st.button("👥  Occupancy Patterns", key="nav_occupancy", use_container_width=True):
+            go_to("occupancy")
 
         st.markdown("### Calculators")
 
@@ -381,17 +391,17 @@ def home_page() -> None:
             <div class="eyebrow">Indoor Air Analysis Platform</div>
             <h1>ATLiCE</h1>
             <p>
-                A focused toolkit for estimating cooling airflow and air changes,
-                evaluating buoyancy-to-momentum effects, and screening airborne
-                infection risk using the Wells–Riley model.
+                A focused toolkit for configuring occupant arrangements, estimating
+                cooling airflow and air changes, evaluating buoyancy-to-momentum effects,
+                and screening airborne infection risk using the Wells–Riley model.
             </p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("## Choose a calculator")
-    st.caption("Open any tool below. The supplied values are defaults and can be changed at any time.")
+    st.markdown("## Choose a tool")
+    st.caption("Open any tool below. Occupancy Pattern 1 is selected by default, and all calculator values remain editable.")
 
     col1, col2, col3 = st.columns(3, gap="large")
 
@@ -446,12 +456,733 @@ def home_page() -> None:
         if st.button("Open Wells–Riley Tool →", key="home_wr", type="primary", use_container_width=True):
             go_to("wells_riley")
 
+    st.markdown("### Occupancy configuration")
+    occupancy_card, occupancy_note = st.columns([1.45, 1], gap="large")
+
+    with occupancy_card:
+        st.markdown(
+            """
+            <div class="tool-card" style="min-height:210px;">
+                <div class="tool-icon">👥</div>
+                <h3>Occupancy Patterns</h3>
+                <p>
+                    View one arrangement at a time. Begin with Pattern 1, then move
+                    to Pattern 2 while retaining the same six heat sources, room,
+                    supply units and exhaust unit.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Open Occupancy Patterns →",
+            key="home_occupancy",
+            type="primary",
+            use_container_width=True,
+        ):
+            go_to("occupancy")
+
+    with occupancy_note:
+        st.info(
+            "**Pattern 1:** two columns of three occupants.\n\n"
+            "**Pattern 2:** two rows of three occupants, with 0.90 m clearance "
+            "from the Main Door wall and the opposite wall."
+        )
+
     st.markdown("### Model scope")
     info1, info2, info3 = st.columns(3)
     info1.info("**Cooling model:** sensible heat only; latent and envelope loads are not included.")
     info2.info("**Richardson model:** uses the specified characteristic length and representative velocity.")
     info3.info("**Wells–Riley model:** assumes steady conditions and does not replace detailed exposure assessment.")
 
+
+
+# =========================================================
+# OCCUPANCY PATTERN DRAWING ENGINE
+# =========================================================
+ROOM_LENGTH = 5.6
+ROOM_WIDTH = 4.2
+ROOM_HEIGHT = 2.7
+
+HUMAN_DIAMETER = 0.30
+HUMAN_RADIUS = HUMAN_DIAMETER / 2
+HUMAN_HEAT_LOAD = 100
+
+UNIT_SIZE = 0.60
+S1_X = 1.8 + UNIT_SIZE / 2
+S1_Y = ROOM_WIDTH / 2
+S2_X = ROOM_LENGTH - 1.4 - UNIT_SIZE / 2
+S2_Y = ROOM_WIDTH / 2
+E1_X = 0.90
+E1_Y = 0.90
+
+HUMAN_COLOUR = "tab:orange"
+SUPPLY_COLOUR = "tab:blue"
+EXHAUST_COLOUR = "tab:green"
+CEILING_GRID_COLOUR = "lightgray"
+DIMENSION_COLOUR = "black"
+
+
+def get_pattern_1_positions():
+    """Pattern 1: the existing two-column arrangement."""
+    vertical_clear_distance = 0.70
+    top_bottom_clearance = 0.95
+    left_right_clearance = 1.20
+    column_clear_distance = 2.60
+
+    y1 = top_bottom_clearance + HUMAN_RADIUS
+    y2 = y1 + HUMAN_DIAMETER + vertical_clear_distance
+    y3 = y2 + HUMAN_DIAMETER + vertical_clear_distance
+
+    left_x = left_right_clearance + HUMAN_RADIUS
+    right_x = left_x + HUMAN_DIAMETER + column_clear_distance
+
+    positions = {
+        "H1": (left_x, y1),
+        "H2": (left_x, y2),
+        "H3": (left_x, y3),
+        "H4": (right_x, y1),
+        "H5": (right_x, y2),
+        "H6": (right_x, y3),
+    }
+    dimensions = {
+        "adjacent_clear": vertical_clear_distance,
+        "wall_clear_x": left_right_clearance,
+        "wall_clear_y": top_bottom_clearance,
+        "between_columns": column_clear_distance,
+    }
+    return positions, dimensions
+
+
+def get_pattern_2_positions():
+    """Pattern 2: two rows of three occupants."""
+    adjacent_clear_distance = 0.70
+    main_opposite_wall_clearance = 0.90
+
+    occupied_row_length = 3 * HUMAN_DIAMETER + 2 * adjacent_clear_distance
+    left_right_clearance = (ROOM_LENGTH - occupied_row_length) / 2
+
+    row_clear_distance = (
+        ROOM_WIDTH
+        - 2 * main_opposite_wall_clearance
+        - 2 * HUMAN_DIAMETER
+    )
+    if row_clear_distance <= 0:
+        raise ValueError("Pattern 2 does not fit inside the room.")
+
+    x1 = left_right_clearance + HUMAN_RADIUS
+    x2 = x1 + HUMAN_DIAMETER + adjacent_clear_distance
+    x3 = x2 + HUMAN_DIAMETER + adjacent_clear_distance
+
+    bottom_row_y = main_opposite_wall_clearance + HUMAN_RADIUS
+    top_row_y = bottom_row_y + HUMAN_DIAMETER + row_clear_distance
+
+    positions = {
+        "H1": (x1, bottom_row_y),
+        "H2": (x2, bottom_row_y),
+        "H3": (x3, bottom_row_y),
+        "H4": (x1, top_row_y),
+        "H5": (x2, top_row_y),
+        "H6": (x3, top_row_y),
+    }
+    dimensions = {
+        "adjacent_clear": adjacent_clear_distance,
+        "wall_clear_x": left_right_clearance,
+        "wall_clear_y": main_opposite_wall_clearance,
+        "between_rows": row_clear_distance,
+    }
+    return positions, dimensions
+
+
+def draw_double_arrow(
+    ax,
+    start,
+    end,
+    label,
+    label_position=None,
+    rotation=0,
+    fontsize=9,
+    linewidth=1.4,
+):
+    ax.annotate(
+        "",
+        xy=end,
+        xytext=start,
+        arrowprops=dict(
+            arrowstyle="<->",
+            linewidth=linewidth,
+            color=DIMENSION_COLOUR,
+            shrinkA=0,
+            shrinkB=0,
+        ),
+        zorder=8,
+    )
+
+    if label_position is None:
+        label_position = (
+            (start[0] + end[0]) / 2,
+            (start[1] + end[1]) / 2,
+        )
+
+    ax.text(
+        label_position[0],
+        label_position[1],
+        label,
+        ha="center",
+        va="center",
+        rotation=rotation,
+        fontsize=fontsize,
+        fontweight="bold",
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.84, pad=1.2),
+        zorder=9,
+    )
+
+
+def draw_extension_line(ax, x_values, y_values):
+    ax.plot(
+        x_values,
+        y_values,
+        color=DIMENSION_COLOUR,
+        linewidth=0.9,
+        zorder=7,
+    )
+
+
+def draw_ceiling_grid(ax):
+    vertical_lines = [0.60, 1.20, 1.80, 2.40, 3.00, 3.60, 4.20, 4.80, 5.40]
+    horizontal_lines = [0.60, 1.20, 1.80, 2.40, 3.00, 3.60]
+    ax.vlines(
+        vertical_lines,
+        ymin=0,
+        ymax=ROOM_WIDTH,
+        colors=CEILING_GRID_COLOUR,
+        linewidth=1.0,
+        zorder=1,
+    )
+    ax.hlines(
+        horizontal_lines,
+        xmin=0,
+        xmax=ROOM_LENGTH,
+        colors=CEILING_GRID_COLOUR,
+        linewidth=1.0,
+        zorder=1,
+    )
+
+
+def draw_room_boundary(ax):
+    ax.add_patch(
+        Rectangle(
+            (0, 0),
+            ROOM_LENGTH,
+            ROOM_WIDTH,
+            fill=False,
+            edgecolor="black",
+            linewidth=3,
+            zorder=6,
+        )
+    )
+
+
+def draw_occupants(ax, positions):
+    for label, (x_value, y_value) in positions.items():
+        ax.add_patch(
+            Circle(
+                (x_value, y_value),
+                HUMAN_RADIUS,
+                facecolor=HUMAN_COLOUR,
+                edgecolor="black",
+                linewidth=1.1,
+                alpha=0.92,
+                zorder=4,
+            )
+        )
+        ax.text(
+            x_value,
+            y_value,
+            label,
+            ha="center",
+            va="center",
+            fontsize=8.5,
+            fontweight="bold",
+            zorder=5,
+        )
+
+
+def draw_ventilation_units(ax):
+    units = [
+        (S1_X, S1_Y, "S1", SUPPLY_COLOUR),
+        (S2_X, S2_Y, "S2", SUPPLY_COLOUR),
+        (E1_X, E1_Y, "E1", EXHAUST_COLOUR),
+    ]
+    for x_value, y_value, label, colour in units:
+        ax.add_patch(
+            Rectangle(
+                (x_value - UNIT_SIZE / 2, y_value - UNIT_SIZE / 2),
+                UNIT_SIZE,
+                UNIT_SIZE,
+                facecolor=colour,
+                edgecolor="black",
+                linewidth=2,
+                alpha=0.78,
+                zorder=4,
+            )
+        )
+        ax.text(
+            x_value,
+            y_value,
+            label,
+            ha="center",
+            va="center",
+            fontsize=10,
+            fontweight="bold",
+            zorder=5,
+        )
+
+
+def draw_external_room_dimensions(ax):
+    draw_double_arrow(
+        ax,
+        (0, -0.38),
+        (ROOM_LENGTH, -0.38),
+        "5.6 m",
+        (ROOM_LENGTH / 2, -0.55),
+        fontsize=10,
+    )
+    draw_double_arrow(
+        ax,
+        (-0.34, 0),
+        (-0.34, ROOM_WIDTH),
+        "4.2 m",
+        (-0.53, ROOM_WIDTH / 2),
+        rotation=90,
+        fontsize=10,
+    )
+
+
+def draw_room_labels(ax):
+    ax.text(
+        ROOM_LENGTH / 2,
+        -0.08,
+        "Main Door",
+        ha="center",
+        va="top",
+        fontsize=10,
+        fontweight="bold",
+    )
+    ax.text(
+        ROOM_LENGTH / 2,
+        ROOM_WIDTH + 0.08,
+        "Wall opposite to Main Door",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        fontweight="bold",
+    )
+    ax.text(
+        ROOM_LENGTH + 0.18,
+        ROOM_WIDTH / 2,
+        "Split system",
+        ha="center",
+        va="center",
+        rotation=90,
+        fontsize=10,
+        fontweight="bold",
+    )
+
+
+def draw_pattern_1_dimensions(ax, positions, dimensions):
+    h1_x, h1_y = positions["H1"]
+    h2_x, h2_y = positions["H2"]
+    h3_x, h3_y = positions["H3"]
+    h6_x, h6_y = positions["H6"]
+
+    h2_top = h2_y + HUMAN_RADIUS
+    h3_bottom = h3_y - HUMAN_RADIUS
+    arrow_x = h2_x + 0.34
+    draw_double_arrow(
+        ax,
+        (arrow_x, h2_top),
+        (arrow_x, h3_bottom),
+        f"{dimensions['adjacent_clear']:.2f} m",
+        (arrow_x + 0.20, (h2_top + h3_bottom) / 2),
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h2_x + HUMAN_RADIUS, arrow_x], [h2_top, h2_top])
+    draw_extension_line(ax, [h3_x + HUMAN_RADIUS, arrow_x], [h3_bottom, h3_bottom])
+
+    h3_left = h3_x - HUMAN_RADIUS
+    left_arrow_y = h3_y - 0.40
+    draw_double_arrow(
+        ax,
+        (0, left_arrow_y),
+        (h3_left, left_arrow_y),
+        f"{dimensions['wall_clear_x']:.2f} m",
+        (h3_left / 2, left_arrow_y - 0.13),
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h3_left, h3_left], [left_arrow_y, h3_y])
+
+    h6_right = h6_x + HUMAN_RADIUS
+    right_arrow_y = h6_y - 0.40
+    draw_double_arrow(
+        ax,
+        (h6_right, right_arrow_y),
+        (ROOM_LENGTH, right_arrow_y),
+        f"{dimensions['wall_clear_x']:.2f} m",
+        ((h6_right + ROOM_LENGTH) / 2, right_arrow_y - 0.13),
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h6_right, h6_right], [right_arrow_y, h6_y])
+
+    h3_top = h3_y + HUMAN_RADIUS
+    top_arrow_x = h3_x - 0.43
+    draw_double_arrow(
+        ax,
+        (top_arrow_x, h3_top),
+        (top_arrow_x, ROOM_WIDTH),
+        f"{dimensions['wall_clear_y']:.2f} m",
+        (top_arrow_x - 0.14, (h3_top + ROOM_WIDTH) / 2),
+        rotation=90,
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [top_arrow_x, h3_x], [h3_top, h3_top])
+
+    h1_bottom = h1_y - HUMAN_RADIUS
+    bottom_arrow_x = h1_x - 0.43
+    draw_double_arrow(
+        ax,
+        (bottom_arrow_x, 0),
+        (bottom_arrow_x, h1_bottom),
+        f"{dimensions['wall_clear_y']:.2f} m",
+        (bottom_arrow_x - 0.14, h1_bottom / 2),
+        rotation=90,
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [bottom_arrow_x, h1_x], [h1_bottom, h1_bottom])
+
+    left_column_right_edge = h3_x + HUMAN_RADIUS
+    right_column_left_edge = h6_x - HUMAN_RADIUS
+    arrow_y = h3_y + HUMAN_RADIUS + 0.26
+    draw_double_arrow(
+        ax,
+        (left_column_right_edge, arrow_y),
+        (right_column_left_edge, arrow_y),
+        f"{dimensions['between_columns']:.2f} m",
+        ((left_column_right_edge + right_column_left_edge) / 2, arrow_y + 0.12),
+        fontsize=8.5,
+    )
+    draw_extension_line(
+        ax,
+        [left_column_right_edge, left_column_right_edge],
+        [h3_y, arrow_y],
+    )
+    draw_extension_line(
+        ax,
+        [right_column_left_edge, right_column_left_edge],
+        [h6_y, arrow_y],
+    )
+
+
+def draw_pattern_2_dimensions(ax, positions, dimensions):
+    """Pattern 2 dimensions, with most dimensions referenced to the H4 row."""
+    h1_x, h1_y = positions["H1"]
+    h2_x, h2_y = positions["H2"]
+    h4_x, h4_y = positions["H4"]
+    h5_x, h5_y = positions["H5"]
+    h6_x, h6_y = positions["H6"]
+
+    h4_right = h4_x + HUMAN_RADIUS
+    h5_left = h5_x - HUMAN_RADIUS
+    adjacent_arrow_y = h4_y + 0.36
+    draw_double_arrow(
+        ax,
+        (h4_right, adjacent_arrow_y),
+        (h5_left, adjacent_arrow_y),
+        f"{dimensions['adjacent_clear']:.2f} m",
+        ((h4_right + h5_left) / 2, adjacent_arrow_y + 0.13),
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h4_right, h4_right], [h4_y, adjacent_arrow_y])
+    draw_extension_line(ax, [h5_left, h5_left], [h5_y, adjacent_arrow_y])
+
+    h4_left = h4_x - HUMAN_RADIUS
+    left_arrow_y = h4_y - 0.35
+    draw_double_arrow(
+        ax,
+        (0, left_arrow_y),
+        (h4_left, left_arrow_y),
+        f"{dimensions['wall_clear_x']:.2f} m",
+        (h4_left / 2, left_arrow_y - 0.13),
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h4_left, h4_left], [left_arrow_y, h4_y])
+
+    h6_right = h6_x + HUMAN_RADIUS
+    right_arrow_y = h6_y - 0.35
+    draw_double_arrow(
+        ax,
+        (h6_right, right_arrow_y),
+        (ROOM_LENGTH, right_arrow_y),
+        f"{dimensions['wall_clear_x']:.2f} m",
+        ((h6_right + ROOM_LENGTH) / 2, right_arrow_y - 0.13),
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h6_right, h6_right], [right_arrow_y, h6_y])
+
+    bottom_row_top = h1_y + HUMAN_RADIUS
+    top_row_bottom = h4_y - HUMAN_RADIUS
+    row_arrow_x = h4_x - 0.43
+    draw_double_arrow(
+        ax,
+        (row_arrow_x, bottom_row_top),
+        (row_arrow_x, top_row_bottom),
+        f"{dimensions['between_rows']:.2f} m",
+        (row_arrow_x - 0.17, (bottom_row_top + top_row_bottom) / 2),
+        rotation=90,
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [row_arrow_x, h1_x], [bottom_row_top, bottom_row_top])
+    draw_extension_line(ax, [row_arrow_x, h4_x], [top_row_bottom, top_row_bottom])
+
+    h2_bottom = h2_y - HUMAN_RADIUS
+    main_door_arrow_x = h2_x + 0.43
+    draw_double_arrow(
+        ax,
+        (main_door_arrow_x, 0),
+        (main_door_arrow_x, h2_bottom),
+        f"{dimensions['wall_clear_y']:.2f} m",
+        (main_door_arrow_x + 0.16, h2_bottom / 2),
+        rotation=90,
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h2_x, main_door_arrow_x], [h2_bottom, h2_bottom])
+
+    h6_top = h6_y + HUMAN_RADIUS
+    opposite_arrow_x = h6_x + 0.43
+    draw_double_arrow(
+        ax,
+        (opposite_arrow_x, h6_top),
+        (opposite_arrow_x, ROOM_WIDTH),
+        f"{dimensions['wall_clear_y']:.2f} m",
+        (opposite_arrow_x + 0.16, (h6_top + ROOM_WIDTH) / 2),
+        rotation=90,
+        fontsize=8.5,
+    )
+    draw_extension_line(ax, [h6_x, opposite_arrow_x], [h6_top, h6_top])
+
+
+def create_occupancy_figure(pattern_name: str):
+    """Create one occupancy figure at a time for display inside Streamlit."""
+    if pattern_name == "Pattern 1":
+        positions, dimensions = get_pattern_1_positions()
+        subtitle = "Existing layout: two columns of three people"
+        dimension_function = draw_pattern_1_dimensions
+    else:
+        positions, dimensions = get_pattern_2_positions()
+        subtitle = (
+            "Two rows with 0.90 m clearance to the Main Door "
+            "and opposite wall"
+        )
+        dimension_function = draw_pattern_2_dimensions
+
+    fig, ax = plt.subplots(figsize=(12.6, 8.0))
+    fig.patch.set_facecolor("white")
+
+    ax.set_xlim(-0.72, ROOM_LENGTH + 0.52)
+    ax.set_ylim(-0.76, ROOM_WIDTH + 0.53)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Room length (m)")
+    ax.set_ylabel("Room width (m)")
+    ax.set_title(
+        f"{pattern_name}\n{subtitle}",
+        fontsize=14,
+        pad=18,
+        fontweight="bold",
+    )
+
+    draw_ceiling_grid(ax)
+    draw_room_boundary(ax)
+    draw_occupants(ax, positions)
+    draw_ventilation_units(ax)
+    draw_room_labels(ax)
+    draw_external_room_dimensions(ax)
+    dimension_function(ax, positions, dimensions)
+
+    ax.text(
+        ROOM_LENGTH / 2,
+        ROOM_WIDTH + 0.34,
+        f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+    )
+    ax.grid(False)
+
+    legend_items = [
+        Line2D(
+            [0], [0], marker="o", color="none",
+            markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
+            markersize=10,
+            label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+        ),
+        Line2D(
+            [0], [0], marker="s", color="none",
+            markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
+            markersize=10, label="S1 and S2: Supply units",
+        ),
+        Line2D(
+            [0], [0], marker="s", color="none",
+            markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
+            markersize=10, label="E1: Exhaust unit",
+        ),
+        Line2D(
+            [0], [0], color=CEILING_GRID_COLOUR,
+            linewidth=2, label="Ceiling grid: 0.60 m × 0.60 m",
+        ),
+    ]
+    fig.legend(
+        handles=legend_items,
+        title="Layout Labels",
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=2,
+        frameon=True,
+        fontsize=9,
+        title_fontsize=10,
+    )
+    fig.tight_layout(rect=[0.02, 0.11, 0.98, 0.96])
+    return fig, positions, dimensions
+
+
+def figure_to_png(fig) -> bytes:
+    """Convert a Matplotlib figure to downloadable PNG bytes."""
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=300, bbox_inches="tight")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+# =========================================================
+# OCCUPANCY PAGE
+# =========================================================
+def set_occupancy_pattern(pattern_name: str) -> None:
+    """Update the selected pattern before Streamlit rebuilds the page."""
+    st.session_state.occupancy_pattern = pattern_name
+
+
+def occupancy_page() -> None:
+    render_page_heading(
+        "👥",
+        "Occupancy Patterns",
+        "Select one six-person arrangement at a time and review its clear distances inside the ATLiCE room.",
+    )
+
+    if "occupancy_pattern" not in st.session_state:
+        st.session_state.occupancy_pattern = "Pattern 1"
+
+    selector_col, summary_col = st.columns([1.35, 1], gap="large")
+
+    with selector_col:
+        selected_pattern = st.radio(
+            "Select an occupancy configuration",
+            options=["Pattern 1", "Pattern 2"],
+            key="occupancy_pattern",
+            horizontal=True,
+        )
+
+        previous_col, next_col = st.columns(2)
+        with previous_col:
+            st.button(
+                "← Previous pattern",
+                disabled=selected_pattern == "Pattern 1",
+                use_container_width=True,
+                key="occupancy_previous",
+                on_click=set_occupancy_pattern,
+                args=("Pattern 1",),
+            )
+        with next_col:
+            st.button(
+                "Next pattern →",
+                disabled=selected_pattern == "Pattern 2",
+                type="primary",
+                use_container_width=True,
+                key="occupancy_next",
+                on_click=set_occupancy_pattern,
+                args=("Pattern 2",),
+            )
+
+    with summary_col:
+        if selected_pattern == "Pattern 1":
+            st.markdown(
+                """
+                <div class="section-card">
+                    <h3>Pattern 1 — existing configuration</h3>
+                    <p>Two columns of three human heat sources.</p>
+                    <p class="small-note">
+                        0.70 m clear spacing within each column; 2.60 m between
+                        columns; 1.20 m side-wall clearance; 0.95 m clearance
+                        to the Main Door and opposite wall.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div class="section-card">
+                    <h3>Pattern 2 — two-row configuration</h3>
+                    <p>Two rows of three human heat sources.</p>
+                    <p class="small-note">
+                        0.70 m spacing within each row; 1.80 m between rows;
+                        1.65 m side-wall clearance; 0.90 m clearance to the
+                        Main Door and opposite wall.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("### Selected layout")
+    fig, positions, dimensions = create_occupancy_figure(selected_pattern)
+    png_data = figure_to_png(fig)
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+    metric1, metric2, metric3, metric4 = st.columns(4)
+    metric1.metric("Occupants", "6")
+    metric2.metric("Heat per occupant", "100 W")
+    metric3.metric("Total occupant load", "600 W")
+    metric4.metric("Room volume", "63.50 m³")
+
+    details_left, details_right = st.columns([1.25, 1], gap="large")
+    with details_left:
+        st.markdown("### Clear-distance summary")
+        if selected_pattern == "Pattern 1":
+            st.write("Within-column spacing: **0.70 m**")
+            st.write("Clear distance between columns: **2.60 m**")
+            st.write("Left and right wall clearance: **1.20 m each**")
+            st.write("Main Door and opposite-wall clearance: **0.95 m each**")
+        else:
+            st.write("Within-row spacing: **0.70 m**")
+            st.write("Clear distance between rows: **1.80 m**")
+            st.write("Left and right wall clearance: **1.65 m each**")
+            st.write("Main Door and opposite-wall clearance: **0.90 m each**")
+
+    with details_right:
+        st.markdown("### Export")
+        st.download_button(
+            label=f"⬇ Download {selected_pattern} figure",
+            data=png_data,
+            file_name=f"atlice_{selected_pattern.lower().replace(' ', '_')}.png",
+            mime="image/png",
+            key=f"download_{selected_pattern}",
+            use_container_width=True,
+        )
+        st.caption(
+            "The figure is generated directly in the app. No `/mnt/data` or "
+            "Google Colab file path is required."
+        )
 
 # =========================================================
 # COOLING AND ACH PAGE
@@ -1010,6 +1741,8 @@ page = st.session_state.current_page
 
 if page == "home":
     home_page()
+elif page == "occupancy":
+    occupancy_page()
 elif page == "ach":
     cooling_ach_page()
 elif page == "ri":
