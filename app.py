@@ -401,7 +401,7 @@ def home_page() -> None:
     )
 
     st.markdown("## Choose a tool")
-    st.caption("Open any tool below. Occupancy Pattern 1 is selected by default, and all calculator values remain editable.")
+    st.caption("Choose an occupancy symmetry pattern first, preview it, and confirm it before continuing to the Richardson calculation.")
 
     col1, col2, col3 = st.columns(3, gap="large")
 
@@ -466,9 +466,9 @@ def home_page() -> None:
                 <div class="tool-icon">👥</div>
                 <h3>Occupancy Patterns</h3>
                 <p>
-                    View one arrangement at a time. Begin with Pattern 1, then move
-                    to Pattern 2 while retaining the same six heat sources, room,
-                    supply units and exhaust unit.
+                    Choose Pattern 1 or Pattern 2 under the Symmetry Pattern
+                    group, preview the selected layout, and confirm it before
+                    continuing to the Richardson calculation.
                 </p>
             </div>
             """,
@@ -484,9 +484,9 @@ def home_page() -> None:
 
     with occupancy_note:
         st.info(
-            "**Pattern 1:** two columns of three occupants.\n\n"
-            "**Pattern 2:** two rows of three occupants, with 0.90 m clearance "
-            "from the Main Door wall and the opposite wall."
+            "**Workflow:** Select a Symmetry Pattern → confirm the selection "
+            "to display the figure → confirm the displayed pattern → continue "
+            "to Richardson inputs."
         )
 
     st.markdown("### Model scope")
@@ -972,33 +972,33 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
 
 
 def create_occupancy_figure(pattern_name: str):
-    """Create one occupancy figure at a time for display inside Streamlit."""
+    """Create a compact occupancy figure for display inside Streamlit."""
     if pattern_name == "Pattern 1":
         positions, dimensions = get_pattern_1_positions()
-        subtitle = "Existing layout: two columns of three people"
         dimension_function = draw_pattern_1_dimensions
-    else:
+    elif pattern_name == "Pattern 2":
         positions, dimensions = get_pattern_2_positions()
-        subtitle = (
-            "Two rows with 0.90 m clearance to the Main Door "
-            "and opposite wall"
-        )
         dimension_function = draw_pattern_2_dimensions
+    else:
+        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
 
-    fig, ax = plt.subplots(figsize=(12.6, 8.0))
+    # A smaller figure is used because it will be displayed in a centred,
+    # reduced-width Streamlit column.
+    fig, ax = plt.subplots(figsize=(9.2, 5.8))
     fig.patch.set_facecolor("white")
 
     ax.set_xlim(-0.72, ROOM_LENGTH + 0.52)
     ax.set_ylim(-0.76, ROOM_WIDTH + 0.53)
     ax.set_aspect("equal")
-    ax.set_xlabel("Room length (m)")
-    ax.set_ylabel("Room width (m)")
+    ax.set_xlabel("Room length (m)", fontsize=9)
+    ax.set_ylabel("Room width (m)", fontsize=9)
     ax.set_title(
-        f"{pattern_name}\n{subtitle}",
-        fontsize=14,
-        pad=18,
+        pattern_name,
+        fontsize=13,
+        pad=12,
         fontweight="bold",
     )
+    ax.tick_params(axis="both", labelsize=8)
 
     draw_ceiling_grid(ax)
     draw_room_boundary(ax)
@@ -1014,7 +1014,7 @@ def create_occupancy_figure(pattern_name: str):
         f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m",
         ha="center",
         va="bottom",
-        fontsize=9,
+        fontsize=8.5,
     )
     ax.grid(False)
 
@@ -1022,18 +1022,18 @@ def create_occupancy_figure(pattern_name: str):
         Line2D(
             [0], [0], marker="o", color="none",
             markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
-            markersize=10,
+            markersize=9,
             label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
         ),
         Line2D(
             [0], [0], marker="s", color="none",
             markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
-            markersize=10, label="S1 and S2: Supply units",
+            markersize=9, label="S1 and S2: Supply units",
         ),
         Line2D(
             [0], [0], marker="s", color="none",
             markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
-            markersize=10, label="E1: Exhaust unit",
+            markersize=9, label="E1: Exhaust unit",
         ),
         Line2D(
             [0], [0], color=CEILING_GRID_COLOUR,
@@ -1047,10 +1047,10 @@ def create_occupancy_figure(pattern_name: str):
         bbox_to_anchor=(0.5, 0.015),
         ncol=2,
         frameon=True,
-        fontsize=9,
-        title_fontsize=10,
+        fontsize=8,
+        title_fontsize=9,
     )
-    fig.tight_layout(rect=[0.02, 0.11, 0.98, 0.96])
+    fig.tight_layout(rect=[0.02, 0.13, 0.98, 0.95])
     return fig, positions, dimensions
 
 
@@ -1065,89 +1065,70 @@ def figure_to_png(fig) -> bytes:
 # =========================================================
 # OCCUPANCY PAGE
 # =========================================================
-def set_occupancy_pattern(pattern_name: str) -> None:
-    """Update the selected pattern before Streamlit rebuilds the page."""
-    st.session_state.occupancy_pattern = pattern_name
+def reset_occupancy_workflow() -> None:
+    """
+    Clear preview and confirmation whenever the radio selection changes.
+
+    This prevents a previously previewed or confirmed drawing from remaining
+    active after the user chooses a different pattern.
+    """
+    st.session_state.occupancy_preview_pattern = None
+    st.session_state.confirmed_occupancy_pattern = None
+    st.session_state.pop("ri_result", None)
 
 
 def occupancy_page() -> None:
     render_page_heading(
         "👥",
         "Occupancy Patterns",
-        "Select one six-person arrangement at a time and review its clear distances inside the ATLiCE room.",
+        "Choose a symmetry pattern, preview its layout, and confirm it before continuing.",
     )
 
-    if "occupancy_pattern" not in st.session_state:
-        st.session_state.occupancy_pattern = "Pattern 1"
+    st.session_state.setdefault("occupancy_pattern", "Pattern 1")
+    st.session_state.setdefault("occupancy_preview_pattern", None)
+    st.session_state.setdefault("confirmed_occupancy_pattern", None)
 
-    selector_col, summary_col = st.columns([1.35, 1], gap="large")
+    st.markdown("### Symmetry Pattern")
 
-    with selector_col:
+    selection_left, selection_centre, selection_right = st.columns([1, 2.2, 1])
+
+    with selection_centre:
         selected_pattern = st.radio(
-            "Select an occupancy configuration",
+            "Choose a pattern",
             options=["Pattern 1", "Pattern 2"],
             key="occupancy_pattern",
             horizontal=True,
+            on_change=reset_occupancy_workflow,
         )
 
-        previous_col, next_col = st.columns(2)
-        with previous_col:
-            st.button(
-                "← Previous pattern",
-                disabled=selected_pattern == "Pattern 1",
-                use_container_width=True,
-                key="occupancy_previous",
-                on_click=set_occupancy_pattern,
-                args=("Pattern 1",),
-            )
-        with next_col:
-            st.button(
-                "Next pattern →",
-                disabled=selected_pattern == "Pattern 2",
-                type="primary",
-                use_container_width=True,
-                key="occupancy_next",
-                on_click=set_occupancy_pattern,
-                args=("Pattern 2",),
-            )
+        if st.button(
+            "Confirm selection and show figure",
+            key="preview_selected_pattern",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state.occupancy_preview_pattern = selected_pattern
+            st.session_state.confirmed_occupancy_pattern = None
+            st.session_state.pop("ri_result", None)
+            st.rerun()
 
-    with summary_col:
-        if selected_pattern == "Pattern 1":
-            st.markdown(
-                """
-                <div class="section-card">
-                    <h3>Pattern 1 — existing configuration</h3>
-                    <p>Two columns of three human heat sources.</p>
-                    <p class="small-note">
-                        0.70 m clear spacing within each column; 2.60 m between
-                        columns; 1.20 m side-wall clearance; 0.95 m clearance
-                        to the Main Door and opposite wall.
-                    </p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                """
-                <div class="section-card">
-                    <h3>Pattern 2 — two-row configuration</h3>
-                    <p>Two rows of three human heat sources.</p>
-                    <p class="small-note">
-                        0.70 m spacing within each row; 1.80 m between rows;
-                        1.65 m side-wall clearance; 0.90 m clearance to the
-                        Main Door and opposite wall.
-                    </p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    preview_pattern = st.session_state.get("occupancy_preview_pattern")
 
-    st.markdown("### Selected layout")
-    fig, positions, dimensions = create_occupancy_figure(selected_pattern)
-    png_data = figure_to_png(fig)
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
+    if preview_pattern != selected_pattern:
+        st.info("Select Pattern 1 or Pattern 2, then confirm the selection to display its figure.")
+        return
+
+    st.markdown("---")
+    st.markdown(f"### {preview_pattern}")
+
+    # The figure is intentionally displayed in a narrower centre column.
+    figure_left, figure_centre, figure_right = st.columns([1.15, 3.2, 1.15])
+
+    with figure_centre:
+        fig, positions, dimensions = create_occupancy_figure(preview_pattern)
+        png_data = figure_to_png(fig)
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
 
     metric1, metric2, metric3, metric4 = st.columns(4)
     metric1.metric("Occupants", "6")
@@ -1155,34 +1136,28 @@ def occupancy_page() -> None:
     metric3.metric("Total occupant load", "600 W")
     metric4.metric("Room volume", "63.50 m³")
 
-    details_left, details_right = st.columns([1.25, 1], gap="large")
-    with details_left:
-        st.markdown("### Clear-distance summary")
-        if selected_pattern == "Pattern 1":
-            st.write("Within-column spacing: **0.70 m**")
-            st.write("Clear distance between columns: **2.60 m**")
-            st.write("Left and right wall clearance: **1.20 m each**")
-            st.write("Main Door and opposite-wall clearance: **0.95 m each**")
-        else:
-            st.write("Within-row spacing: **0.70 m**")
-            st.write("Clear distance between rows: **1.80 m**")
-            st.write("Left and right wall clearance: **1.65 m each**")
-            st.write("Main Door and opposite-wall clearance: **0.90 m each**")
+    action_left, action_centre, action_right = st.columns([1, 2.2, 1])
 
-    with details_right:
-        st.markdown("### Export")
+    with action_centre:
         st.download_button(
-            label=f"⬇ Download {selected_pattern} figure",
+            label=f"⬇ Download {preview_pattern} figure",
             data=png_data,
-            file_name=f"atlice_{selected_pattern.lower().replace(' ', '_')}.png",
+            file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}.png",
             mime="image/png",
-            key=f"download_{selected_pattern}",
+            key=f"download_preview_{preview_pattern}",
             use_container_width=True,
         )
-        st.caption(
-            "The figure is generated directly in the app. No `/mnt/data` or "
-            "Google Colab file path is required."
-        )
+
+        if st.button(
+            "Confirm pattern and continue to Richardson →",
+            key="confirm_pattern_and_continue",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state.confirmed_occupancy_pattern = preview_pattern
+            st.session_state.current_page = "ri"
+            st.rerun()
+
 
 # =========================================================
 # COOLING AND ACH PAGE
@@ -1385,6 +1360,30 @@ def richardson_page() -> None:
         "🌡️",
         "Richardson Number",
         "Assess the relative importance of thermal buoyancy and forced-air momentum.",
+    )
+
+    confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
+
+    if not confirmed_pattern:
+        st.warning(
+            "No occupancy pattern has been confirmed. Select and confirm a "
+            "Symmetry Pattern before opening the Richardson inputs."
+        )
+        if st.button(
+            "Go to Occupancy Patterns",
+            key="ri_go_to_occupancy",
+            type="primary",
+        ):
+            go_to("occupancy")
+        return
+
+    st.markdown(
+        f"""
+        <div class="result-banner">
+            <b>Confirmed occupancy:</b> Symmetry Pattern — {confirmed_pattern}
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     input_col, guide_col = st.columns([1.45, 1], gap="large")
