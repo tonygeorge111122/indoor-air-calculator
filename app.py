@@ -1,3 +1,4 @@
+import base64
 import math
 from datetime import datetime
 from io import BytesIO
@@ -276,6 +277,30 @@ def apply_custom_css() -> None:
             margin-top: 0.15rem;
         }
 
+        .workflow-status {
+            padding: 0.8rem 0.9rem;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.14);
+            margin: 0.45rem 0 0.8rem 0;
+            font-size: 0.82rem;
+            line-height: 1.65;
+        }
+
+        .report-section {
+            padding: 1.2rem 1.3rem;
+            margin: 0.9rem 0;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.94);
+            border: 1px solid var(--atlice-border);
+            box-shadow: 0 8px 22px rgba(15,23,42,0.04);
+        }
+
+        .report-section h3 {
+            margin-top: 0;
+            color: var(--atlice-primary-dark);
+        }
+
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         </style>
@@ -296,7 +321,9 @@ PAGES = {
     "Cooling & ACH": "ach",
     "Richardson Number": "ri",
     "Wells–Riley Risk": "wells_riley",
+    "Final Report": "report",
 }
+
 
 if "current_page" not in st.session_state:
     st.session_state.current_page = "home"
@@ -308,6 +335,10 @@ def go_to(page_name: str) -> None:
 
 
 def render_sidebar() -> None:
+    confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
+    ri_ready = bool(st.session_state.get("confirmed_richardson"))
+    wells_ready = bool(st.session_state.get("confirmed_wells_riley"))
+
     with st.sidebar:
         st.markdown(
             """
@@ -323,28 +354,63 @@ def render_sidebar() -> None:
         if st.button("⌂  ATLiCE Home", key="nav_home", use_container_width=True):
             go_to("home")
 
-        st.markdown("### Occupancy")
+        st.markdown("### Guided workflow")
 
-        if st.button("👥  Occupancy Patterns", key="nav_occupancy", use_container_width=True):
+        if st.button("1  👥  Occupancy Pattern", key="nav_occupancy", use_container_width=True):
             go_to("occupancy")
 
-        st.markdown("### Calculators")
-
-        if st.button("❄️  Cooling & ACH", key="nav_ach", use_container_width=True):
-            go_to("ach")
-
-        if st.button("🌡️  Richardson Number", key="nav_ri", use_container_width=True):
+        if st.button(
+            "2  🌡️  Richardson Number",
+            key="nav_ri",
+            use_container_width=True,
+            disabled=not bool(confirmed_pattern),
+        ):
             go_to("ri")
 
-        if st.button("🫁  Wells–Riley Risk", key="nav_wr", use_container_width=True):
+        if st.button(
+            "3  🫁  Wells–Riley Risk",
+            key="nav_wr",
+            use_container_width=True,
+            disabled=not ri_ready,
+        ):
             go_to("wells_riley")
+
+        if st.button(
+            "4  📄  Final Report",
+            key="nav_report",
+            use_container_width=True,
+            disabled=not wells_ready,
+        ):
+            go_to("report")
+
+        pattern_status = f"✓ {confirmed_pattern}" if confirmed_pattern else "○ Not confirmed"
+        ri_status = "✓ Confirmed" if ri_ready else "○ Pending"
+        wells_status = "✓ Confirmed" if wells_ready else "○ Pending"
+        report_status = "✓ Available" if wells_ready else "○ Locked"
+
+        st.markdown(
+            f"""
+            <div class="workflow-status">
+                <b>Progress</b><br>
+                Occupancy: {pattern_status}<br>
+                Richardson: {ri_status}<br>
+                Wells–Riley: {wells_status}<br>
+                Report: {report_status}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("### Standalone calculator")
+        if st.button("❄️  Cooling & ACH", key="nav_ach", use_container_width=True):
+            go_to("ach")
 
         st.markdown("---")
         st.markdown(
             """
             <div class="small-note" style="color:rgba(255,255,255,0.72);">
-                All values are editable. Results are intended for preliminary
-                analysis and should be checked against the assumptions of each model.
+                Complete each guided stage and confirm its result before moving
+                to the next stage. All model inputs remain editable.
             </div>
             """,
             unsafe_allow_html=True,
@@ -520,7 +586,7 @@ HUMAN_COLOUR = "tab:orange"
 SUPPLY_COLOUR = "tab:blue"
 EXHAUST_COLOUR = "tab:green"
 CEILING_GRID_COLOUR = "lightgray"
-DIMENSION_COLOUR = "black"
+DIMENSION_COLOUR = "#475569"
 
 
 def get_pattern_1_positions():
@@ -601,8 +667,8 @@ def draw_double_arrow(
     label,
     label_position=None,
     rotation=0,
-    fontsize=9,
-    linewidth=1.4,
+    fontsize=8.0,
+    linewidth=0.75,
 ):
     ax.annotate(
         "",
@@ -612,6 +678,7 @@ def draw_double_arrow(
             arrowstyle="<->",
             linewidth=linewidth,
             color=DIMENSION_COLOUR,
+            mutation_scale=8,
             shrinkA=0,
             shrinkB=0,
         ),
@@ -632,8 +699,9 @@ def draw_double_arrow(
         va="center",
         rotation=rotation,
         fontsize=fontsize,
-        fontweight="bold",
-        bbox=dict(facecolor="white", edgecolor="none", alpha=0.84, pad=1.2),
+        fontweight="normal",
+        color=DIMENSION_COLOUR,
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.68, pad=0.7),
         zorder=9,
     )
 
@@ -643,7 +711,7 @@ def draw_extension_line(ax, x_values, y_values):
         x_values,
         y_values,
         color=DIMENSION_COLOUR,
-        linewidth=0.9,
+        linewidth=0.50,
         zorder=7,
     )
 
@@ -702,7 +770,7 @@ def draw_occupants(ax, positions):
             label,
             ha="center",
             va="center",
-            fontsize=8.5,
+            fontsize=7.8,
             fontweight="bold",
             zorder=5,
         )
@@ -746,7 +814,7 @@ def draw_external_room_dimensions(ax):
         (ROOM_LENGTH, -0.38),
         "5.6 m",
         (ROOM_LENGTH / 2, -0.55),
-        fontsize=10,
+        fontsize=8.4,
     )
     draw_double_arrow(
         ax,
@@ -755,7 +823,7 @@ def draw_external_room_dimensions(ax):
         "4.2 m",
         (-0.53, ROOM_WIDTH / 2),
         rotation=90,
-        fontsize=10,
+        fontsize=8.4,
     )
 
 
@@ -805,7 +873,7 @@ def draw_pattern_1_dimensions(ax, positions, dimensions):
         (arrow_x, h3_bottom),
         f"{dimensions['adjacent_clear']:.2f} m",
         (arrow_x + 0.20, (h2_top + h3_bottom) / 2),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h2_x + HUMAN_RADIUS, arrow_x], [h2_top, h2_top])
     draw_extension_line(ax, [h3_x + HUMAN_RADIUS, arrow_x], [h3_bottom, h3_bottom])
@@ -818,7 +886,7 @@ def draw_pattern_1_dimensions(ax, positions, dimensions):
         (h3_left, left_arrow_y),
         f"{dimensions['wall_clear_x']:.2f} m",
         (h3_left / 2, left_arrow_y - 0.13),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h3_left, h3_left], [left_arrow_y, h3_y])
 
@@ -830,7 +898,7 @@ def draw_pattern_1_dimensions(ax, positions, dimensions):
         (ROOM_LENGTH, right_arrow_y),
         f"{dimensions['wall_clear_x']:.2f} m",
         ((h6_right + ROOM_LENGTH) / 2, right_arrow_y - 0.13),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h6_right, h6_right], [right_arrow_y, h6_y])
 
@@ -843,7 +911,7 @@ def draw_pattern_1_dimensions(ax, positions, dimensions):
         f"{dimensions['wall_clear_y']:.2f} m",
         (top_arrow_x - 0.14, (h3_top + ROOM_WIDTH) / 2),
         rotation=90,
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [top_arrow_x, h3_x], [h3_top, h3_top])
 
@@ -856,7 +924,7 @@ def draw_pattern_1_dimensions(ax, positions, dimensions):
         f"{dimensions['wall_clear_y']:.2f} m",
         (bottom_arrow_x - 0.14, h1_bottom / 2),
         rotation=90,
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [bottom_arrow_x, h1_x], [h1_bottom, h1_bottom])
 
@@ -869,7 +937,7 @@ def draw_pattern_1_dimensions(ax, positions, dimensions):
         (right_column_left_edge, arrow_y),
         f"{dimensions['between_columns']:.2f} m",
         ((left_column_right_edge + right_column_left_edge) / 2, arrow_y + 0.12),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(
         ax,
@@ -900,7 +968,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
         (h5_left, adjacent_arrow_y),
         f"{dimensions['adjacent_clear']:.2f} m",
         ((h4_right + h5_left) / 2, adjacent_arrow_y + 0.13),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h4_right, h4_right], [h4_y, adjacent_arrow_y])
     draw_extension_line(ax, [h5_left, h5_left], [h5_y, adjacent_arrow_y])
@@ -913,7 +981,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
         (h4_left, left_arrow_y),
         f"{dimensions['wall_clear_x']:.2f} m",
         (h4_left / 2, left_arrow_y - 0.13),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h4_left, h4_left], [left_arrow_y, h4_y])
 
@@ -925,7 +993,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
         (ROOM_LENGTH, right_arrow_y),
         f"{dimensions['wall_clear_x']:.2f} m",
         ((h6_right + ROOM_LENGTH) / 2, right_arrow_y - 0.13),
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h6_right, h6_right], [right_arrow_y, h6_y])
 
@@ -939,7 +1007,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
         f"{dimensions['between_rows']:.2f} m",
         (row_arrow_x - 0.17, (bottom_row_top + top_row_bottom) / 2),
         rotation=90,
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [row_arrow_x, h1_x], [bottom_row_top, bottom_row_top])
     draw_extension_line(ax, [row_arrow_x, h4_x], [top_row_bottom, top_row_bottom])
@@ -953,7 +1021,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
         f"{dimensions['wall_clear_y']:.2f} m",
         (main_door_arrow_x + 0.16, h2_bottom / 2),
         rotation=90,
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h2_x, main_door_arrow_x], [h2_bottom, h2_bottom])
 
@@ -966,7 +1034,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
         f"{dimensions['wall_clear_y']:.2f} m",
         (opposite_arrow_x + 0.16, (h6_top + ROOM_WIDTH) / 2),
         rotation=90,
-        fontsize=8.5,
+        fontsize=7.8,
     )
     draw_extension_line(ax, [h6_x, opposite_arrow_x], [h6_top, h6_top])
 
@@ -1066,15 +1134,13 @@ def figure_to_png(fig) -> bytes:
 # OCCUPANCY PAGE
 # =========================================================
 def reset_occupancy_workflow() -> None:
-    """
-    Clear preview and confirmation whenever the radio selection changes.
-
-    This prevents a previously previewed or confirmed drawing from remaining
-    active after the user chooses a different pattern.
-    """
+    """Clear the preview and every downstream result after a pattern change."""
     st.session_state.occupancy_preview_pattern = None
     st.session_state.confirmed_occupancy_pattern = None
+    st.session_state.confirmed_richardson = False
+    st.session_state.confirmed_wells_riley = False
     st.session_state.pop("ri_result", None)
+    st.session_state.pop("wr_result", None)
 
 
 def occupancy_page() -> None:
@@ -1087,6 +1153,8 @@ def occupancy_page() -> None:
     st.session_state.setdefault("occupancy_pattern", "Pattern 1")
     st.session_state.setdefault("occupancy_preview_pattern", None)
     st.session_state.setdefault("confirmed_occupancy_pattern", None)
+    st.session_state.setdefault("confirmed_richardson", False)
+    st.session_state.setdefault("confirmed_wells_riley", False)
 
     st.markdown("### Symmetry Pattern")
 
@@ -1109,7 +1177,10 @@ def occupancy_page() -> None:
         ):
             st.session_state.occupancy_preview_pattern = selected_pattern
             st.session_state.confirmed_occupancy_pattern = None
+            st.session_state.confirmed_richardson = False
+            st.session_state.confirmed_wells_riley = False
             st.session_state.pop("ri_result", None)
+            st.session_state.pop("wr_result", None)
             st.rerun()
 
     preview_pattern = st.session_state.get("occupancy_preview_pattern")
@@ -1155,6 +1226,10 @@ def occupancy_page() -> None:
             use_container_width=True,
         ):
             st.session_state.confirmed_occupancy_pattern = preview_pattern
+            st.session_state.confirmed_richardson = False
+            st.session_state.confirmed_wells_riley = False
+            st.session_state.pop("ri_result", None)
+            st.session_state.pop("wr_result", None)
             st.session_state.current_page = "ri"
             st.rerun()
 
@@ -1178,14 +1253,14 @@ def cooling_ach_page() -> None:
             room_volume = row1a.number_input(
                 "Room volume (m³)",
                 min_value=0.01,
-                value=63.0,
-                step=1.0,
+                value=63.5,
+                step=0.5,
                 key="ach_room_volume",
             )
             people = row1b.number_input(
                 "Number of people",
                 min_value=0,
-                value=5,
+                value=6,
                 step=1,
                 key="ach_people",
             )
@@ -1243,7 +1318,7 @@ def cooling_ach_page() -> None:
                 <p>The sensible cooling airflow is calculated from:</p>
                 <div class="formula-box"><b>Q = H / [ρcp × (Troom − Tsupply)]</b></div>
                 <p class="small-note">
-                    The default values represent a 63 m³ room with five occupants,
+                    The default values represent a 63.5 m³ room with six occupants,
                     100 W sensible heat per person, 12 °C supply air and a 22 °C target.
                 </p>
             </div>
@@ -1359,7 +1434,7 @@ def richardson_page() -> None:
     render_page_heading(
         "🌡️",
         "Richardson Number",
-        "Assess the relative importance of thermal buoyancy and forced-air momentum.",
+        "Enter the airflow and thermal inputs, calculate the result, and confirm it before continuing.",
     )
 
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
@@ -1369,18 +1444,15 @@ def richardson_page() -> None:
             "No occupancy pattern has been confirmed. Select and confirm a "
             "Symmetry Pattern before opening the Richardson inputs."
         )
-        if st.button(
-            "Go to Occupancy Patterns",
-            key="ri_go_to_occupancy",
-            type="primary",
-        ):
+        if st.button("Go to Occupancy Patterns", key="ri_go_to_occupancy", type="primary"):
             go_to("occupancy")
         return
 
     st.markdown(
         f"""
         <div class="result-banner">
-            <b>Confirmed occupancy:</b> Symmetry Pattern — {confirmed_pattern}
+            <b>Step 2 of 4</b><br>
+            Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1445,8 +1517,9 @@ def richardson_page() -> None:
                 <h3>Equation</h3>
                 <div class="formula-box"><b>Ri = g α ΔT L / V²</b></div>
                 <p class="small-note">
-                    Use a length and velocity that represent the actual flow region being assessed.
-                    The result can change substantially because velocity appears as a squared term.
+                    Use a characteristic length and velocity that represent the
+                    airflow region being assessed. Velocity is squared, so the
+                    result is highly sensitive to the selected velocity.
                 </p>
             </div>
             """,
@@ -1458,49 +1531,49 @@ def richardson_page() -> None:
         )
 
     if calculate:
-        if air_velocity <= 0:
-            st.error("Air velocity must be greater than zero.")
-            st.session_state.pop("ri_result", None)
+        st.session_state.confirmed_richardson = False
+        st.session_state.confirmed_wells_riley = False
+        st.session_state.pop("wr_result", None)
+
+        ri = gravity * alpha * delta_t * length_scale / (air_velocity**2)
+
+        if ri < 0:
+            classification = "Opposing buoyancy direction"
+            interpretation = (
+                "The negative sign indicates that buoyancy acts opposite to the "
+                "selected reference-flow direction."
+            )
+        elif ri < 0.1:
+            classification = "Momentum-dominated flow"
+            interpretation = (
+                "Forced-air momentum is likely to dominate over buoyancy for the selected scales."
+            )
+        elif ri <= 1:
+            classification = "Mixed convection"
+            interpretation = (
+                "Both buoyancy and forced-air momentum are likely to influence the airflow."
+            )
         else:
-            ri = gravity * alpha * delta_t * length_scale / (air_velocity**2)
+            classification = "Buoyancy-dominated flow"
+            interpretation = (
+                "Thermal buoyancy is likely to dominate over forced-air momentum for the selected scales."
+            )
 
-            if ri < 0:
-                classification = "Opposing buoyancy direction"
-                interpretation = (
-                    "The negative sign indicates that the specified temperature difference produces "
-                    "buoyancy in the opposite direction to the reference flow convention."
-                )
-            elif ri < 0.1:
-                classification = "Momentum-dominated flow"
-                interpretation = (
-                    "Forced-air momentum is likely to dominate over buoyancy for the selected scales."
-                )
-            elif ri <= 1:
-                classification = "Mixed convection"
-                interpretation = (
-                    "Both buoyancy and forced-air momentum are likely to influence the airflow."
-                )
-            else:
-                classification = "Buoyancy-dominated flow"
-                interpretation = (
-                    "Thermal buoyancy is likely to dominate over forced-air momentum for the selected scales."
-                )
-
-            st.session_state.ri_result = {
-                "gravity": gravity,
-                "alpha": alpha,
-                "delta_t": delta_t,
-                "length_scale": length_scale,
-                "air_velocity": air_velocity,
-                "ri": ri,
-                "classification": classification,
-                "interpretation": interpretation,
-            }
+        st.session_state.ri_result = {
+            "gravity": gravity,
+            "alpha": alpha,
+            "delta_t": delta_t,
+            "length_scale": length_scale,
+            "air_velocity": air_velocity,
+            "ri": ri,
+            "classification": classification,
+            "interpretation": interpretation,
+        }
 
     result = st.session_state.get("ri_result")
     if result:
         st.markdown("---")
-        st.markdown("## Results")
+        st.markdown("## Richardson result")
         m1, m2, m3 = st.columns(3)
         m1.metric("Richardson number", f"{result['ri']:.4f}")
         m2.metric("Air velocity", f"{result['air_velocity']:.3f} m/s")
@@ -1538,7 +1611,24 @@ Richardson number: {result['ri']:.6f}
 Classification: {result['classification']}
 Interpretation: {result['interpretation']}
 """
-        download_text_button(results_text, "atlice_richardson_results.txt", "download_ri")
+
+        action_left, action_centre, action_right = st.columns([1, 2.4, 1])
+        with action_centre:
+            download_text_button(
+                results_text,
+                "atlice_richardson_results.txt",
+                "download_ri",
+            )
+            if st.button(
+                "Confirm Richardson result and continue to Wells–Riley →",
+                key="confirm_ri_continue",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.confirmed_richardson = True
+                st.session_state.confirmed_wells_riley = False
+                st.session_state.current_page = "wells_riley"
+                st.rerun()
 
 
 # =========================================================
@@ -1548,7 +1638,31 @@ def wells_riley_page() -> None:
     render_page_heading(
         "🫁",
         "Wells–Riley Infection Risk",
-        "Estimate ideal well-mixed and local airborne infection probabilities for a steady exposure scenario.",
+        "Calculate the ideal and local modelled infection probabilities, then confirm the result.",
+    )
+
+    confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
+    ri_result = st.session_state.get("ri_result")
+    ri_confirmed = bool(st.session_state.get("confirmed_richardson"))
+
+    if not confirmed_pattern or not ri_result or not ri_confirmed:
+        st.warning(
+            "The Richardson result has not been confirmed. Complete and confirm "
+            "the Richardson stage before opening Wells–Riley inputs."
+        )
+        if st.button("Go to Richardson Number", key="wr_go_to_ri", type="primary"):
+            go_to("ri")
+        return
+
+    st.markdown(
+        f"""
+        <div class="result-banner">
+            <b>Step 3 of 4</b><br>
+            Pattern: <b>{confirmed_pattern}</b> &nbsp; | &nbsp;
+            Confirmed Richardson number: <b>{ri_result['ri']:.4f}</b>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     input_col, guide_col = st.columns([1.55, 1], gap="large")
@@ -1560,9 +1674,12 @@ def wells_riley_page() -> None:
             room_airflow = row1a.number_input(
                 "Room airflow, Q (m³/h)",
                 min_value=0.0,
-                value=150.0,
+                value=180.0,
                 step=10.0,
-                help="The original defaults produce 150 m³/h from the cooling calculation.",
+                help=(
+                    "Default: 180 m³/h, corresponding to six 100 W sensible "
+                    "heat sources with 12 °C supply air and a 22 °C room target."
+                ),
                 key="wr_airflow",
             )
             ventilation_effectiveness = row1b.number_input(
@@ -1627,11 +1744,13 @@ def wells_riley_page() -> None:
             unsafe_allow_html=True,
         )
         st.warning(
-            "Quanta generation rates are highly scenario-dependent. This output is a model estimate, "
-            "not a clinical prediction or a substitute for public-health guidance."
+            "Quanta generation rates are scenario-dependent. This is a screening "
+            "model and not a clinical prediction."
         )
 
     if calculate:
+        st.session_state.confirmed_wells_riley = False
+
         dose_term = infected_people * quanta_rate * breathing_rate * exposure_time
         effective_local_airflow = ventilation_effectiveness * room_airflow
 
@@ -1671,7 +1790,7 @@ def wells_riley_page() -> None:
     result = st.session_state.get("wr_result")
     if result:
         st.markdown("---")
-        st.markdown("## Results")
+        st.markdown("## Wells–Riley result")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Ideal well-mixed risk", f"{result['p_ideal'] * 100:.2f}%")
         m2.metric("Local infection risk", f"{result['p_local'] * 100:.2f}%")
@@ -1689,8 +1808,8 @@ def wells_riley_page() -> None:
             <div class="result-banner">
                 <b>{result['risk_band']}.</b><br>
                 With a local ventilation effectiveness of
-                <b>{result['ventilation_effectiveness']:.2f}</b>, the local modelled risk is
-                <b>{direction_text}</b> the ideal well-mixed result.
+                <b>{result['ventilation_effectiveness']:.2f}</b>, the local modelled
+                risk is <b>{direction_text}</b> the ideal well-mixed result.
             </div>
             """,
             unsafe_allow_html=True,
@@ -1709,7 +1828,9 @@ def wells_riley_page() -> None:
             st.markdown("### Probability values")
             st.write(f"Ideal probability: **{result['p_ideal']:.6f}**")
             st.write(f"Local probability: **{result['p_local']:.6f}**")
-            st.latex(r"P_{\mathrm{loc}} = 1-\exp\left(-\frac{Iqpt}{\varepsilon_{V,\mathrm{loc}}Q}\right)")
+            st.latex(
+                r"P_{\mathrm{loc}} = 1-\exp\left(-\frac{Iqpt}{\varepsilon_{V,\mathrm{loc}}Q}\right)"
+            )
 
         results_text = f"""ATLiCE — WELLS–RILEY RESULTS
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -1730,7 +1851,410 @@ Ideal well-mixed probability: {result['p_ideal'] * 100:.4f}%
 Local infection probability: {result['p_local']:.8f}
 Local infection probability: {result['p_local'] * 100:.4f}%
 """
-        download_text_button(results_text, "atlice_wells_riley_results.txt", "download_wr")
+
+        action_left, action_centre, action_right = st.columns([1, 2.4, 1])
+        with action_centre:
+            download_text_button(
+                results_text,
+                "atlice_wells_riley_results.txt",
+                "download_wr",
+            )
+
+            if not st.session_state.get("confirmed_wells_riley"):
+                if st.button(
+                    "Confirm Wells–Riley result",
+                    key="confirm_wells_result",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.confirmed_wells_riley = True
+                    st.rerun()
+            else:
+                st.success("Wells–Riley result confirmed. The complete report is ready.")
+                if st.button(
+                    "View complete analysis report →",
+                    key="open_final_report",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.current_page = "report"
+                    st.rerun()
+
+
+# =========================================================
+# COMPLETE REPORT
+# =========================================================
+def get_pattern_configuration(pattern_name: str) -> dict:
+    """Return the selected arrangement and its clear-distance summary."""
+    if pattern_name == "Pattern 1":
+        return {
+            "group": "Symmetry Pattern",
+            "arrangement": "Two columns of three occupants",
+            "spacing_label": "Clear spacing within each column",
+            "spacing_value": "0.70 m",
+            "separation_label": "Clear distance between columns",
+            "separation_value": "2.60 m",
+            "side_clearance": "1.20 m at each side wall",
+            "door_clearance": "0.95 m at the Main Door and opposite wall",
+        }
+
+    return {
+        "group": "Symmetry Pattern",
+        "arrangement": "Two rows of three occupants",
+        "spacing_label": "Clear spacing within each row",
+        "spacing_value": "0.70 m",
+        "separation_label": "Clear distance between rows",
+        "separation_value": "1.80 m",
+        "side_clearance": "1.65 m at each side wall",
+        "door_clearance": "0.90 m at the Main Door and opposite wall",
+    }
+
+
+def get_load_summary() -> dict:
+    """Calculate the six-person sensible-load airflow used in the study summary."""
+    occupants = 6
+    heat_per_occupant = HUMAN_HEAT_LOAD
+    total_heat = occupants * heat_per_occupant
+    supply_temperature = 12.0
+    target_temperature = 22.0
+    rho_cp = 1200.0
+    delta_t = target_temperature - supply_temperature
+    room_volume = ROOM_LENGTH * ROOM_WIDTH * ROOM_HEIGHT
+    airflow_m3s = total_heat / (rho_cp * delta_t)
+    airflow_ls = airflow_m3s * 1000
+    airflow_m3h = airflow_m3s * 3600
+    ach = airflow_m3h / room_volume
+
+    return {
+        "occupants": occupants,
+        "heat_per_occupant": heat_per_occupant,
+        "total_heat": total_heat,
+        "supply_temperature": supply_temperature,
+        "target_temperature": target_temperature,
+        "rho_cp": rho_cp,
+        "delta_t": delta_t,
+        "room_volume": room_volume,
+        "airflow_m3s": airflow_m3s,
+        "airflow_ls": airflow_ls,
+        "airflow_m3h": airflow_m3h,
+        "ach": ach,
+    }
+
+
+def build_complete_report_text(
+    pattern_name: str,
+    configuration: dict,
+    load: dict,
+    ri: dict,
+    wr: dict,
+) -> str:
+    return f"""ATLiCE — COMPLETE INDOOR AIR ANALYSIS REPORT
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+1. ROOM AND OCCUPANCY CONFIGURATION
+Pattern group: {configuration['group']}
+Selected pattern: {pattern_name}
+Arrangement: {configuration['arrangement']}
+Room dimensions: {ROOM_LENGTH:.2f} m × {ROOM_WIDTH:.2f} m × {ROOM_HEIGHT:.2f} m
+Room volume: {load['room_volume']:.3f} m³
+Supply units: S1 and S2, each {UNIT_SIZE:.2f} m × {UNIT_SIZE:.2f} m
+Exhaust unit: E1, {UNIT_SIZE:.2f} m × {UNIT_SIZE:.2f} m
+{configuration['spacing_label']}: {configuration['spacing_value']}
+{configuration['separation_label']}: {configuration['separation_value']}
+Side-wall clearance: {configuration['side_clearance']}
+Main/opposite-wall clearance: {configuration['door_clearance']}
+
+2. SENSIBLE LOAD AND AIRFLOW SUMMARY
+Occupants: {load['occupants']}
+Heat per occupant: {load['heat_per_occupant']:.0f} W
+Total sensible occupant load: {load['total_heat']:.0f} W
+Supply-air temperature: {load['supply_temperature']:.1f} °C
+Target room temperature: {load['target_temperature']:.1f} °C
+Temperature difference: {load['delta_t']:.1f} K
+Calculated airflow: {load['airflow_ls']:.2f} L/s
+Calculated airflow: {load['airflow_m3h']:.2f} m³/h
+Calculated total supply ACH: {load['ach']:.2f} h⁻¹
+
+3. RICHARDSON NUMBER
+Gravity: {ri['gravity']:.4f} m/s²
+Thermal expansion coefficient: {ri['alpha']:.6f} 1/K
+Temperature difference: {ri['delta_t']:.4f} K
+Characteristic length: {ri['length_scale']:.4f} m
+Air velocity: {ri['air_velocity']:.4f} m/s
+Richardson number: {ri['ri']:.6f}
+Classification: {ri['classification']}
+Interpretation: {ri['interpretation']}
+
+4. WELLS–RILEY SCREENING RESULT
+Room airflow: {wr['room_airflow']:.2f} m³/h
+Local ventilation effectiveness: {wr['ventilation_effectiveness']:.4f}
+Infectious people: {wr['infected_people']}
+Quanta generation rate: {wr['quanta_rate']:.4f} quanta/h
+Breathing rate: {wr['breathing_rate']:.4f} m³/h
+Exposure time: {wr['exposure_time']:.4f} h
+Effective local airflow: {wr['effective_local_airflow']:.4f} m³/h
+Ideal well-mixed probability: {wr['p_ideal'] * 100:.4f}%
+Local infection probability: {wr['p_local'] * 100:.4f}%
+Risk band: {wr['risk_band']}
+
+MODEL LIMITATIONS
+The sensible-load result includes occupant heat only. The Richardson result depends on the selected representative scales. The Wells–Riley result is a steady-state screening estimate and is sensitive to quanta rate and ventilation-effectiveness assumptions.
+"""
+
+
+def build_complete_report_html(
+    pattern_name: str,
+    configuration: dict,
+    load: dict,
+    ri: dict,
+    wr: dict,
+    figure_png: bytes,
+) -> str:
+    encoded_figure = base64.b64encode(figure_png).decode("ascii")
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATLiCE Complete Analysis Report</title>
+<style>
+    body {{ font-family: Arial, Helvetica, sans-serif; color: #18312e; margin: 0; background: #eef5f3; }}
+    .page {{ max-width: 940px; margin: 28px auto; background: white; padding: 34px 40px; border-radius: 18px; box-shadow: 0 12px 35px rgba(15, 60, 56, 0.10); }}
+    h1 {{ margin: 0; color: #0f766e; }}
+    h2 {{ color: #115e59; border-bottom: 1px solid #dbe7e4; padding-bottom: 7px; margin-top: 30px; }}
+    .meta {{ color: #64748b; margin: 6px 0 24px; }}
+    .figure {{ width: 100%; max-width: 780px; display: block; margin: 15px auto 24px; }}
+    table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
+    th, td {{ text-align: left; padding: 9px 11px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
+    th {{ width: 42%; background: #f8fafc; color: #334155; }}
+    .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }}
+    .metric {{ border: 1px solid #dbe7e4; border-radius: 12px; padding: 12px; background: #f8fbfa; }}
+    .metric b {{ display: block; color: #64748b; font-size: 12px; margin-bottom: 5px; }}
+    .metric span {{ color: #115e59; font-size: 20px; font-weight: 700; }}
+    .note {{ margin-top: 26px; padding: 13px 15px; background: #f8fafc; border-left: 4px solid #14b8a6; color: #475569; font-size: 13px; line-height: 1.5; }}
+    @media print {{ body {{ background: white; }} .page {{ box-shadow: none; margin: 0; max-width: none; }} }}
+</style>
+</head>
+<body>
+<div class="page">
+    <h1>ATLiCE Complete Indoor Air Analysis</h1>
+    <div class="meta">Generated {generated} · Selected pattern: {pattern_name}</div>
+
+    <img class="figure" src="data:image/png;base64,{encoded_figure}" alt="Selected occupancy configuration">
+
+    <h2>1. Room and occupancy configuration</h2>
+    <table>
+        <tr><th>Pattern group</th><td>{configuration['group']}</td></tr>
+        <tr><th>Selected pattern</th><td>{pattern_name}</td></tr>
+        <tr><th>Arrangement</th><td>{configuration['arrangement']}</td></tr>
+        <tr><th>Room dimensions</th><td>{ROOM_LENGTH:.2f} m × {ROOM_WIDTH:.2f} m × {ROOM_HEIGHT:.2f} m</td></tr>
+        <tr><th>Room volume</th><td>{load['room_volume']:.3f} m³</td></tr>
+        <tr><th>{configuration['spacing_label']}</th><td>{configuration['spacing_value']}</td></tr>
+        <tr><th>{configuration['separation_label']}</th><td>{configuration['separation_value']}</td></tr>
+        <tr><th>Side-wall clearance</th><td>{configuration['side_clearance']}</td></tr>
+        <tr><th>Main/opposite-wall clearance</th><td>{configuration['door_clearance']}</td></tr>
+        <tr><th>Ventilation units</th><td>S1 and S2 supply units; E1 exhaust unit; each 0.60 m × 0.60 m</td></tr>
+    </table>
+
+    <h2>2. Sensible load and airflow summary</h2>
+    <div class="metrics">
+        <div class="metric"><b>Total occupant load</b><span>{load['total_heat']:.0f} W</span></div>
+        <div class="metric"><b>Calculated airflow</b><span>{load['airflow_ls']:.1f} L/s</span></div>
+        <div class="metric"><b>Total supply ACH</b><span>{load['ach']:.2f}</span></div>
+    </div>
+    <table>
+        <tr><th>Occupants</th><td>{load['occupants']}</td></tr>
+        <tr><th>Heat per occupant</th><td>{load['heat_per_occupant']:.0f} W</td></tr>
+        <tr><th>Supply / target temperature</th><td>{load['supply_temperature']:.1f} °C / {load['target_temperature']:.1f} °C</td></tr>
+        <tr><th>Calculated airflow</th><td>{load['airflow_m3h']:.2f} m³/h</td></tr>
+    </table>
+
+    <h2>3. Richardson number</h2>
+    <div class="metrics">
+        <div class="metric"><b>Richardson number</b><span>{ri['ri']:.4f}</span></div>
+        <div class="metric"><b>Air velocity</b><span>{ri['air_velocity']:.3f} m/s</span></div>
+        <div class="metric"><b>Classification</b><span style="font-size:15px">{ri['classification']}</span></div>
+    </div>
+    <table>
+        <tr><th>Temperature difference</th><td>{ri['delta_t']:.3f} K</td></tr>
+        <tr><th>Characteristic length</th><td>{ri['length_scale']:.3f} m</td></tr>
+        <tr><th>Interpretation</th><td>{ri['interpretation']}</td></tr>
+    </table>
+
+    <h2>4. Wells–Riley screening result</h2>
+    <div class="metrics">
+        <div class="metric"><b>Ideal risk</b><span>{wr['p_ideal'] * 100:.2f}%</span></div>
+        <div class="metric"><b>Local risk</b><span>{wr['p_local'] * 100:.2f}%</span></div>
+        <div class="metric"><b>Effective local airflow</b><span>{wr['effective_local_airflow']:.1f}</span></div>
+    </div>
+    <table>
+        <tr><th>Room airflow</th><td>{wr['room_airflow']:.2f} m³/h</td></tr>
+        <tr><th>Local ventilation effectiveness</th><td>{wr['ventilation_effectiveness']:.3f}</td></tr>
+        <tr><th>Infectious people / quanta rate</th><td>{wr['infected_people']} / {wr['quanta_rate']:.2f} quanta/h</td></tr>
+        <tr><th>Breathing rate / exposure time</th><td>{wr['breathing_rate']:.2f} m³/h / {wr['exposure_time']:.2f} h</td></tr>
+        <tr><th>Risk band</th><td>{wr['risk_band']}</td></tr>
+    </table>
+
+    <div class="note"><b>Limitations:</b> Occupant sensible heat is the only load included in the automatic load summary. Richardson number depends on representative length and velocity. Wells–Riley is a steady-state screening model and is sensitive to quanta-rate and local ventilation-effectiveness assumptions.</div>
+</div>
+</body>
+</html>"""
+
+
+def reset_complete_analysis() -> None:
+    """Clear the guided workflow and return to occupancy selection."""
+    keys_to_remove = [
+        "occupancy_preview_pattern",
+        "confirmed_occupancy_pattern",
+        "ri_result",
+        "wr_result",
+    ]
+    for key in keys_to_remove:
+        st.session_state.pop(key, None)
+    st.session_state.occupancy_pattern = "Pattern 1"
+    st.session_state.confirmed_richardson = False
+    st.session_state.confirmed_wells_riley = False
+    st.session_state.current_page = "occupancy"
+
+
+def complete_report_page() -> None:
+    render_page_heading(
+        "📄",
+        "Complete Analysis Report",
+        "Review and download the confirmed occupancy, load, Richardson and Wells–Riley results.",
+    )
+
+    pattern_name = st.session_state.get("confirmed_occupancy_pattern")
+    ri = st.session_state.get("ri_result")
+    wr = st.session_state.get("wr_result")
+    ri_confirmed = bool(st.session_state.get("confirmed_richardson"))
+    wr_confirmed = bool(st.session_state.get("confirmed_wells_riley"))
+
+    if not pattern_name or not ri or not wr or not ri_confirmed or not wr_confirmed:
+        st.warning(
+            "The report is locked until the occupancy pattern, Richardson result "
+            "and Wells–Riley result have all been confirmed."
+        )
+        if st.button("Return to guided workflow", key="report_return_workflow", type="primary"):
+            if not pattern_name:
+                go_to("occupancy")
+            elif not ri_confirmed:
+                go_to("ri")
+            else:
+                go_to("wells_riley")
+        return
+
+    configuration = get_pattern_configuration(pattern_name)
+    load = get_load_summary()
+    fig, _, _ = create_occupancy_figure(pattern_name)
+    figure_png = figure_to_png(fig)
+
+    st.markdown(
+        f"""
+        <div class="result-banner">
+            <b>Step 4 of 4 — complete</b><br>
+            Symmetry Pattern — <b>{pattern_name}</b> and both model results are confirmed.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    figure_left, figure_centre, figure_right = st.columns([0.95, 3.7, 0.95])
+    with figure_centre:
+        st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+    st.markdown("### Configuration and sensible load")
+    config_col, load_col = st.columns(2, gap="large")
+    with config_col:
+        st.markdown('<div class="report-section"><h3>Selected configuration</h3>', unsafe_allow_html=True)
+        st.write(f"Pattern group: **{configuration['group']}**")
+        st.write(f"Selected layout: **{pattern_name}**")
+        st.write(f"Arrangement: **{configuration['arrangement']}**")
+        st.write(f"Room: **{ROOM_LENGTH:.1f} × {ROOM_WIDTH:.1f} × {ROOM_HEIGHT:.1f} m**")
+        st.write(f"{configuration['spacing_label']}: **{configuration['spacing_value']}**")
+        st.write(f"{configuration['separation_label']}: **{configuration['separation_value']}**")
+        st.write(f"Side-wall clearance: **{configuration['side_clearance']}**")
+        st.write(f"Door-wall clearance: **{configuration['door_clearance']}**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with load_col:
+        st.markdown('<div class="report-section"><h3>Load and airflow</h3>', unsafe_allow_html=True)
+        st.write(f"Occupants: **{load['occupants']}**")
+        st.write(f"Heat per occupant: **{load['heat_per_occupant']:.0f} W**")
+        st.write(f"Total sensible occupant load: **{load['total_heat']:.0f} W**")
+        st.write(f"Supply / target temperature: **{load['supply_temperature']:.1f} / {load['target_temperature']:.1f} °C**")
+        st.write(f"Calculated airflow: **{load['airflow_ls']:.2f} L/s ({load['airflow_m3h']:.2f} m³/h)**")
+        st.write(f"Calculated total supply ACH: **{load['ach']:.2f} h⁻¹**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("### Confirmed model results")
+    ri_col, wr_col = st.columns(2, gap="large")
+    with ri_col:
+        st.markdown('<div class="report-section"><h3>Richardson number</h3>', unsafe_allow_html=True)
+        st.metric("Ri", f"{ri['ri']:.4f}")
+        st.write(f"Classification: **{ri['classification']}**")
+        st.write(f"Velocity: **{ri['air_velocity']:.3f} m/s**")
+        st.write(f"ΔT: **{ri['delta_t']:.2f} K**")
+        st.write(ri["interpretation"])
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with wr_col:
+        st.markdown('<div class="report-section"><h3>Wells–Riley</h3>', unsafe_allow_html=True)
+        st.metric("Local modelled risk", f"{wr['p_local'] * 100:.2f}%")
+        st.write(f"Ideal well-mixed risk: **{wr['p_ideal'] * 100:.2f}%**")
+        st.write(f"Effective local airflow: **{wr['effective_local_airflow']:.2f} m³/h**")
+        st.write(f"Ventilation effectiveness: **{wr['ventilation_effectiveness']:.3f}**")
+        st.write(f"Risk band: **{wr['risk_band']}**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    report_text = build_complete_report_text(pattern_name, configuration, load, ri, wr)
+    report_html = build_complete_report_html(
+        pattern_name,
+        configuration,
+        load,
+        ri,
+        wr,
+        figure_png,
+    )
+
+    st.markdown("### Download report")
+    download_col1, download_col2 = st.columns(2)
+    with download_col1:
+        st.download_button(
+            label="⬇ Download formatted HTML report",
+            data=report_html.encode("utf-8"),
+            file_name=f"ATLiCE_{pattern_name.replace(' ', '_')}_complete_report.html",
+            mime="text/html",
+            key="download_complete_html_report",
+            use_container_width=True,
+        )
+    with download_col2:
+        st.download_button(
+            label="⬇ Download text report",
+            data=report_text,
+            file_name=f"ATLiCE_{pattern_name.replace(' ', '_')}_complete_report.txt",
+            mime="text/plain",
+            key="download_complete_text_report",
+            use_container_width=True,
+        )
+
+    st.caption(
+        "The HTML report includes the selected pattern figure and can be opened "
+        "in a browser or printed to PDF."
+    )
+
+    restart_left, restart_centre, restart_right = st.columns([1, 2, 1])
+    with restart_centre:
+        if st.button(
+            "Start a new analysis",
+            key="restart_complete_analysis",
+            use_container_width=True,
+        ):
+            reset_complete_analysis()
+            st.rerun()
 
 
 # =========================================================
@@ -1748,6 +2272,8 @@ elif page == "ri":
     richardson_page()
 elif page == "wells_riley":
     wells_riley_page()
+elif page == "report":
+    complete_report_page()
 else:
     st.session_state.current_page = "home"
     st.rerun()
