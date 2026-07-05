@@ -972,7 +972,7 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
 
 
 def create_occupancy_figure(pattern_name: str):
-    """Create a compact occupancy figure for display inside Streamlit."""
+    """Create a moderately sized occupancy figure for display inside Streamlit."""
     if pattern_name == "Pattern 1":
         positions, dimensions = get_pattern_1_positions()
         dimension_function = draw_pattern_1_dimensions
@@ -982,23 +982,23 @@ def create_occupancy_figure(pattern_name: str):
     else:
         raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
 
-    # A smaller figure is used because it will be displayed in a centred,
-    # reduced-width Streamlit column.
-    fig, ax = plt.subplots(figsize=(9.2, 5.8))
+    # The figure is moderately enlarged while remaining centred
+    # and leaving enough white space around the layout.
+    fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
 
     ax.set_xlim(-0.72, ROOM_LENGTH + 0.52)
     ax.set_ylim(-0.76, ROOM_WIDTH + 0.53)
     ax.set_aspect("equal")
-    ax.set_xlabel("Room length (m)", fontsize=9)
-    ax.set_ylabel("Room width (m)", fontsize=9)
+    ax.set_xlabel("Room length (m)", fontsize=10)
+    ax.set_ylabel("Room width (m)", fontsize=10)
     ax.set_title(
         pattern_name,
-        fontsize=13,
-        pad=12,
+        fontsize=14,
+        pad=13,
         fontweight="bold",
     )
-    ax.tick_params(axis="both", labelsize=8)
+    ax.tick_params(axis="both", labelsize=9)
 
     draw_ceiling_grid(ax)
     draw_room_boundary(ax)
@@ -1014,7 +1014,7 @@ def create_occupancy_figure(pattern_name: str):
         f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m",
         ha="center",
         va="bottom",
-        fontsize=8.5,
+        fontsize=9,
     )
     ax.grid(False)
 
@@ -1047,8 +1047,8 @@ def create_occupancy_figure(pattern_name: str):
         bbox_to_anchor=(0.5, 0.015),
         ncol=2,
         frameon=True,
-        fontsize=8,
-        title_fontsize=9,
+        fontsize=9,
+        title_fontsize=10,
     )
     fig.tight_layout(rect=[0.02, 0.13, 0.98, 0.95])
     return fig, positions, dimensions
@@ -1121,8 +1121,8 @@ def occupancy_page() -> None:
     st.markdown("---")
     st.markdown(f"### {preview_pattern}")
 
-    # The figure is intentionally displayed in a narrower centre column.
-    figure_left, figure_centre, figure_right = st.columns([1.15, 3.2, 1.15])
+    # Display the figure in a wider centred column.
+    figure_left, figure_centre, figure_right = st.columns([0.80, 4.10, 0.80])
 
     with figure_centre:
         fig, positions, dimensions = create_occupancy_figure(preview_pattern)
