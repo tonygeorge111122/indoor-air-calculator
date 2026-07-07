@@ -812,13 +812,34 @@ def draw_ventilation_units(ax):
 
 
 def get_measurement_locations():
-    """Return the 12 measurement locations on a 4 × 3 grid."""
+    """Return the 12 measurement locations using split-system-side snake numbering.
+
+    Numbering starts from the top-right point near the split system,
+    moves left across the top row, comes down, moves right across
+    the middle row, comes down again, and moves left across the bottom row.
+
+    Final order:
+        M1  = (4.48, 3.15), M2  = (3.36, 3.15), M3  = (2.24, 3.15), M4  = (1.12, 3.15)
+        M5  = (1.12, 2.10), M6  = (2.24, 2.10), M7  = (3.36, 2.10), M8  = (4.48, 2.10)
+        M9  = (4.48, 1.05), M10 = (3.36, 1.05), M11 = (2.24, 1.05), M12 = (1.12, 1.05)
+    """
     locations = {}
     index = 1
-    for y_value in MEASUREMENT_Y_COORDS:
-        for x_value in MEASUREMENT_X_COORDS:
+
+    # Start at the top row and move downward.
+    y_values_top_to_bottom = sorted(MEASUREMENT_Y_COORDS, reverse=True)
+
+    for row_index, y_value in enumerate(y_values_top_to_bottom):
+        # Row 1: right to left, Row 2: left to right, Row 3: right to left.
+        if row_index % 2 == 0:
+            x_values = sorted(MEASUREMENT_X_COORDS, reverse=True)
+        else:
+            x_values = sorted(MEASUREMENT_X_COORDS)
+
+        for x_value in x_values:
             locations[f"M{index}"] = (x_value, y_value)
             index += 1
+
     return locations
 
 
@@ -1201,7 +1222,7 @@ def create_measurement_locations_figure(pattern_name: str):
     ax.text(
         ROOM_LENGTH / 2,
         ROOM_WIDTH + 0.34,
-        "12 measurement locations: x = 1.12, 2.24, 3.36, 4.48 m; y = 1.05, 2.10, 3.15 m",
+        "Measurement numbering starts at top-right near the split system and follows a snake path downward",
         ha="center",
         va="bottom",
         fontsize=8.6,
@@ -1339,8 +1360,9 @@ def occupancy_page() -> None:
         plt.close(measurement_fig)
 
     st.caption(
-        "Measurement grid: 4 locations along the 5.6 m length at x = 1.12, 2.24, 3.36 and 4.48 m, "
-        "and 3 locations along the 4.2 m width at y = 1.05, 2.10 and 3.15 m, giving 12 total locations."
+        "Measurement grid numbering: M1 starts at the top-right location near the split system, "
+        "then M1–M4 move right-to-left across the top row, M5–M8 move left-to-right across the middle row, "
+        "and M9–M12 move right-to-left across the bottom row."
     )
 
     action_left, action_centre, action_right = st.columns([1, 2.2, 1])
@@ -2108,6 +2130,7 @@ Exhaust unit: E1, {UNIT_SIZE:.2f} m × {UNIT_SIZE:.2f} m
 {configuration['separation_label']}: {configuration['separation_value']}
 Side-wall clearance: {configuration['side_clearance']}
 Main/opposite-wall clearance: {configuration['door_clearance']}
+Measurement grid numbering: M1 starts at the top-right location near the split system; M1-M4 move right-to-left across the top row, M5-M8 move left-to-right across the middle row, and M9-M12 move right-to-left across the bottom row.
 
 2. SENSIBLE LOAD AND AIRFLOW SUMMARY
 Occupants: {load['occupants']}
@@ -2205,7 +2228,7 @@ def build_complete_report_html(
         <tr><th>Side-wall clearance</th><td>{configuration['side_clearance']}</td></tr>
         <tr><th>Main/opposite-wall clearance</th><td>{configuration['door_clearance']}</td></tr>
         <tr><th>Ventilation units</th><td>S1 and S2 supply units; E1 exhaust unit; each 0.60 m × 0.60 m</td></tr>
-        <tr><th>Measurement grid</th><td>x = 1.12, 2.24, 3.36, 4.48 m; y = 1.05, 2.10, 3.15 m</td></tr>
+        <tr><th>Measurement grid</th><td>M1 starts at the top-right location near the split system; M1-M4 move right-to-left across the top row, M5-M8 move left-to-right across the middle row, and M9-M12 move right-to-left across the bottom row.</td></tr>
         <tr><th>Total measurement locations</th><td>{len(measurement_locations)}</td></tr>
     </table>
 
