@@ -582,6 +582,10 @@ S2_Y = ROOM_WIDTH / 2
 E1_X = 0.90
 E1_Y = 0.90
 
+MEASUREMENT_X_COORDS = [1.12, 2.24, 3.36, 4.48]
+MEASUREMENT_Y_COORDS = [1.05, 2.10, 3.15]
+MEASUREMENT_COLOUR = "crimson"
+
 HUMAN_COLOUR = "tab:orange"
 SUPPLY_COLOUR = "tab:blue"
 EXHAUST_COLOUR = "tab:green"
@@ -804,6 +808,42 @@ def draw_ventilation_units(ax):
             fontsize=10,
             fontweight="bold",
             zorder=5,
+        )
+
+
+def get_measurement_locations():
+    """Return the 12 measurement locations on a 4 × 3 grid."""
+    locations = {}
+    index = 1
+    for y_value in MEASUREMENT_Y_COORDS:
+        for x_value in MEASUREMENT_X_COORDS:
+            locations[f"M{index}"] = (x_value, y_value)
+            index += 1
+    return locations
+
+
+def draw_measurement_locations(ax):
+    """Draw the 12 measurement locations as labelled markers."""
+    for label, (x_value, y_value) in get_measurement_locations().items():
+        ax.scatter(
+            x_value,
+            y_value,
+            s=60,
+            marker="D",
+            facecolor=MEASUREMENT_COLOUR,
+            edgecolor="white",
+            linewidth=0.9,
+            zorder=6,
+        )
+        ax.text(
+            x_value + 0.08,
+            y_value + 0.08,
+            label,
+            fontsize=7.8,
+            color=MEASUREMENT_COLOUR,
+            fontweight="normal",
+            zorder=7,
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.72, pad=0.5),
         )
 
 
@@ -1122,6 +1162,89 @@ def create_occupancy_figure(pattern_name: str):
     return fig, positions, dimensions
 
 
+def create_measurement_locations_figure(pattern_name: str):
+    """Create a second figure showing the 12 measurement locations."""
+    if pattern_name == "Pattern 1":
+        positions, dimensions = get_pattern_1_positions()
+        dimension_function = draw_pattern_1_dimensions
+    elif pattern_name == "Pattern 2":
+        positions, dimensions = get_pattern_2_positions()
+        dimension_function = draw_pattern_2_dimensions
+    else:
+        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+
+    fig, ax = plt.subplots(figsize=(10.4, 6.5))
+    fig.patch.set_facecolor("white")
+
+    ax.set_xlim(-0.72, ROOM_LENGTH + 0.52)
+    ax.set_ylim(-0.76, ROOM_WIDTH + 0.53)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Room length (m)", fontsize=10)
+    ax.set_ylabel("Room width (m)", fontsize=10)
+    ax.set_title(
+        f"{pattern_name} — Measurement Locations",
+        fontsize=14,
+        pad=13,
+        fontweight="bold",
+    )
+    ax.tick_params(axis="both", labelsize=9)
+
+    draw_ceiling_grid(ax)
+    draw_room_boundary(ax)
+    draw_occupants(ax, positions)
+    draw_ventilation_units(ax)
+    draw_room_labels(ax)
+    draw_external_room_dimensions(ax)
+    dimension_function(ax, positions, dimensions)
+    draw_measurement_locations(ax)
+
+    ax.text(
+        ROOM_LENGTH / 2,
+        ROOM_WIDTH + 0.34,
+        "12 measurement locations: x = 1.12, 2.24, 3.36, 4.48 m; y = 1.05, 2.10, 3.15 m",
+        ha="center",
+        va="bottom",
+        fontsize=8.6,
+    )
+    ax.grid(False)
+
+    legend_items = [
+        Line2D(
+            [0], [0], marker="o", color="none",
+            markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
+            markersize=9,
+            label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+        ),
+        Line2D(
+            [0], [0], marker="s", color="none",
+            markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
+            markersize=9, label="S1 and S2: Supply units",
+        ),
+        Line2D(
+            [0], [0], marker="s", color="none",
+            markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
+            markersize=9, label="E1: Exhaust unit",
+        ),
+        Line2D(
+            [0], [0], marker="D", color="none",
+            markerfacecolor=MEASUREMENT_COLOUR, markeredgecolor="white",
+            markersize=8, label="M1–M12: Measurement locations",
+        ),
+    ]
+    fig.legend(
+        handles=legend_items,
+        title="Layout Labels",
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=2,
+        frameon=True,
+        fontsize=9,
+        title_fontsize=10,
+    )
+    fig.tight_layout(rect=[0.02, 0.13, 0.98, 0.95])
+    return fig
+
+
 def figure_to_png(fig) -> bytes:
     """Convert a Matplotlib figure to downloadable PNG bytes."""
     buffer = BytesIO()
@@ -1207,6 +1330,19 @@ def occupancy_page() -> None:
     metric3.metric("Total occupant load", "600 W")
     metric4.metric("Room volume", "63.50 m³")
 
+    st.markdown("### Measurement locations")
+    measure_left, measure_centre, measure_right = st.columns([0.80, 4.10, 0.80])
+    with measure_centre:
+        measurement_fig = create_measurement_locations_figure(preview_pattern)
+        measurement_png_data = figure_to_png(measurement_fig)
+        st.pyplot(measurement_fig, use_container_width=True)
+        plt.close(measurement_fig)
+
+    st.caption(
+        "Measurement grid: 4 locations along the 5.6 m length at x = 1.12, 2.24, 3.36 and 4.48 m, "
+        "and 3 locations along the 4.2 m width at y = 1.05, 2.10 and 3.15 m, giving 12 total locations."
+    )
+
     action_left, action_centre, action_right = st.columns([1, 2.2, 1])
 
     with action_centre:
@@ -1216,6 +1352,14 @@ def occupancy_page() -> None:
             file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}.png",
             mime="image/png",
             key=f"download_preview_{preview_pattern}",
+            use_container_width=True,
+        )
+        st.download_button(
+            label=f"⬇ Download {preview_pattern} measurement-locations figure",
+            data=measurement_png_data,
+            file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}_measurement_locations.png",
+            mime="image/png",
+            key=f"download_measurement_{preview_pattern}",
             use_container_width=True,
         )
 
@@ -1947,6 +2091,7 @@ def build_complete_report_text(
     load: dict,
     ri: dict,
     wr: dict,
+    measurement_locations: dict,
 ) -> str:
     return f"""ATLiCE — COMPLETE INDOOR AIR ANALYSIS REPORT
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -2009,8 +2154,11 @@ def build_complete_report_html(
     ri: dict,
     wr: dict,
     figure_png: bytes,
+    measurement_figure_png: bytes,
+    measurement_locations: dict,
 ) -> str:
     encoded_figure = base64.b64encode(figure_png).decode("ascii")
+    encoded_measurement_figure = base64.b64encode(measurement_figure_png).decode("ascii")
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     return f"""<!doctype html>
@@ -2043,6 +2191,7 @@ def build_complete_report_html(
     <div class="meta">Generated {generated} · Selected pattern: {pattern_name}</div>
 
     <img class="figure" src="data:image/png;base64,{encoded_figure}" alt="Selected occupancy configuration">
+    <img class="figure" src="data:image/png;base64,{encoded_measurement_figure}" alt="Measurement locations">
 
     <h2>1. Room and occupancy configuration</h2>
     <table>
@@ -2056,6 +2205,8 @@ def build_complete_report_html(
         <tr><th>Side-wall clearance</th><td>{configuration['side_clearance']}</td></tr>
         <tr><th>Main/opposite-wall clearance</th><td>{configuration['door_clearance']}</td></tr>
         <tr><th>Ventilation units</th><td>S1 and S2 supply units; E1 exhaust unit; each 0.60 m × 0.60 m</td></tr>
+        <tr><th>Measurement grid</th><td>x = 1.12, 2.24, 3.36, 4.48 m; y = 1.05, 2.10, 3.15 m</td></tr>
+        <tr><th>Total measurement locations</th><td>{len(measurement_locations)}</td></tr>
     </table>
 
     <h2>2. Sensible load and airflow summary</h2>
@@ -2148,8 +2299,11 @@ def complete_report_page() -> None:
 
     configuration = get_pattern_configuration(pattern_name)
     load = get_load_summary()
+    measurement_locations = get_measurement_locations()
     fig, _, _ = create_occupancy_figure(pattern_name)
     figure_png = figure_to_png(fig)
+    measurement_fig = create_measurement_locations_figure(pattern_name)
+    measurement_figure_png = figure_to_png(measurement_fig)
 
     st.markdown(
         f"""
@@ -2165,6 +2319,11 @@ def complete_report_page() -> None:
     with figure_centre:
         st.pyplot(fig, use_container_width=True)
     plt.close(fig)
+
+    measurement_left, measurement_centre, measurement_right = st.columns([0.95, 3.7, 0.95])
+    with measurement_centre:
+        st.pyplot(measurement_fig, use_container_width=True)
+    plt.close(measurement_fig)
 
     st.markdown("### Configuration and sensible load")
     config_col, load_col = st.columns(2, gap="large")
@@ -2210,7 +2369,7 @@ def complete_report_page() -> None:
         st.write(f"Risk band: **{wr['risk_band']}**")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    report_text = build_complete_report_text(pattern_name, configuration, load, ri, wr)
+    report_text = build_complete_report_text(pattern_name, configuration, load, ri, wr, measurement_locations)
     report_html = build_complete_report_html(
         pattern_name,
         configuration,
@@ -2218,6 +2377,8 @@ def complete_report_page() -> None:
         ri,
         wr,
         figure_png,
+        measurement_figure_png,
+        measurement_locations,
     )
 
     st.markdown("### Download report")
@@ -2242,8 +2403,8 @@ def complete_report_page() -> None:
         )
 
     st.caption(
-        "The HTML report includes the selected pattern figure and can be opened "
-        "in a browser or printed to PDF."
+        "The HTML report includes both the selected pattern figure and the measurement-locations figure, "
+        "and can be opened in a browser or printed to PDF."
     )
 
     restart_left, restart_centre, restart_right = st.columns([1, 2, 1])
