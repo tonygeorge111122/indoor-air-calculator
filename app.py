@@ -1,9 +1,11 @@
 import base64
+import html
 import math
 from datetime import datetime
 from io import BytesIO
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import streamlit as st
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Rectangle
@@ -318,6 +320,7 @@ apply_custom_css()
 PAGES = {
     "Home": "home",
     "Occupancy Patterns": "occupancy",
+    "Measurement ΔT Upload": "measurement",
     "Cooling & ACH": "ach",
     "Richardson Number": "ri",
     "Wells–Riley Risk": "wells_riley",
@@ -336,6 +339,7 @@ def go_to(page_name: str) -> None:
 
 def render_sidebar() -> None:
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
+    measurement_ready = bool(st.session_state.get("confirmed_measurement_delta_t"))
     ri_ready = bool(st.session_state.get("confirmed_richardson"))
     wells_ready = bool(st.session_state.get("confirmed_wells_riley"))
 
@@ -360,15 +364,23 @@ def render_sidebar() -> None:
             go_to("occupancy")
 
         if st.button(
-            "2  🌡️  Richardson Number",
-            key="nav_ri",
+            "2  📊  Measurement ΔT Upload",
+            key="nav_measurement",
             use_container_width=True,
             disabled=not bool(confirmed_pattern),
+        ):
+            go_to("measurement")
+
+        if st.button(
+            "3  🌡️  Richardson Number",
+            key="nav_ri",
+            use_container_width=True,
+            disabled=not measurement_ready,
         ):
             go_to("ri")
 
         if st.button(
-            "3  🫁  Wells–Riley Risk",
+            "4  🫁  Wells–Riley Risk",
             key="nav_wr",
             use_container_width=True,
             disabled=not ri_ready,
@@ -376,7 +388,7 @@ def render_sidebar() -> None:
             go_to("wells_riley")
 
         if st.button(
-            "4  📄  Final Report",
+            "5  📄  Final Report",
             key="nav_report",
             use_container_width=True,
             disabled=not wells_ready,
@@ -384,6 +396,7 @@ def render_sidebar() -> None:
             go_to("report")
 
         pattern_status = f"✓ {confirmed_pattern}" if confirmed_pattern else "○ Not confirmed"
+        measurement_status = "✓ Confirmed" if measurement_ready else "○ Pending"
         ri_status = "✓ Confirmed" if ri_ready else "○ Pending"
         wells_status = "✓ Confirmed" if wells_ready else "○ Pending"
         report_status = "✓ Available" if wells_ready else "○ Locked"
@@ -393,6 +406,7 @@ def render_sidebar() -> None:
             <div class="workflow-status">
                 <b>Progress</b><br>
                 Occupancy: {pattern_status}<br>
+                Measurement ΔT: {measurement_status}<br>
                 Richardson: {ri_status}<br>
                 Wells–Riley: {wells_status}<br>
                 Report: {report_status}
@@ -410,7 +424,8 @@ def render_sidebar() -> None:
             """
             <div class="small-note" style="color:rgba(255,255,255,0.72);">
                 Complete each guided stage and confirm its result before moving
-                to the next stage. All model inputs remain editable.
+                to the next stage. Excel uploads are read only from the third column
+                to calculate ΔT for M1–M12.
             </div>
             """,
             unsafe_allow_html=True,
@@ -467,7 +482,7 @@ def home_page() -> None:
     )
 
     st.markdown("## Choose a tool")
-    st.caption("Choose an occupancy symmetry pattern first, preview it, and confirm it before continuing to the Richardson calculation.")
+    st.caption("Choose an occupancy symmetry pattern first, preview it, upload M1–M12 measurement files, and then continue to the Richardson calculation.")
 
     col1, col2, col3 = st.columns(3, gap="large")
 
@@ -534,7 +549,7 @@ def home_page() -> None:
                 <p>
                     Choose Pattern 1 or Pattern 2 under the Symmetry Pattern
                     group, preview the selected layout, and confirm it before
-                    continuing to the Richardson calculation.
+                    continuing to the measurement ΔT upload stage.
                 </p>
             </div>
             """,
@@ -550,9 +565,9 @@ def home_page() -> None:
 
     with occupancy_note:
         st.info(
-            "**Workflow:** Select a Symmetry Pattern → confirm the selection "
-            "to display the figure → confirm the displayed pattern → continue "
-            "to Richardson inputs."
+            "**Workflow:** Select a Symmetry Pattern → confirm the displayed pattern "
+            "→ upload M1–M12 Excel files → calculate and confirm ΔT "
+            "→ continue to Richardson inputs."
         )
 
     st.markdown("### Model scope")
@@ -1281,10 +1296,16 @@ def reset_occupancy_workflow() -> None:
     """Clear the preview and every downstream result after a pattern change."""
     st.session_state.occupancy_preview_pattern = None
     st.session_state.confirmed_occupancy_pattern = None
+    st.session_state.confirmed_measurement_delta_t = False
     st.session_state.confirmed_richardson = False
     st.session_state.confirmed_wells_riley = False
+    st.session_state.pop("measurement_delta_t_result", None)
     st.session_state.pop("ri_result", None)
     st.session_state.pop("wr_result", None)
+
+
+
+
 
 
 def occupancy_page() -> None:
@@ -1297,6 +1318,7 @@ def occupancy_page() -> None:
     st.session_state.setdefault("occupancy_pattern", "Pattern 1")
     st.session_state.setdefault("occupancy_preview_pattern", None)
     st.session_state.setdefault("confirmed_occupancy_pattern", None)
+    st.session_state.setdefault("confirmed_measurement_delta_t", False)
     st.session_state.setdefault("confirmed_richardson", False)
     st.session_state.setdefault("confirmed_wells_riley", False)
 
@@ -1321,8 +1343,10 @@ def occupancy_page() -> None:
         ):
             st.session_state.occupancy_preview_pattern = selected_pattern
             st.session_state.confirmed_occupancy_pattern = None
+            st.session_state.confirmed_measurement_delta_t = False
             st.session_state.confirmed_richardson = False
             st.session_state.confirmed_wells_riley = False
+            st.session_state.pop("measurement_delta_t_result", None)
             st.session_state.pop("ri_result", None)
             st.session_state.pop("wr_result", None)
             st.rerun()
@@ -1386,18 +1410,289 @@ def occupancy_page() -> None:
         )
 
         if st.button(
-            "Confirm pattern and continue to Richardson →",
+            "Confirm pattern and continue to Measurement ΔT Upload →",
             key="confirm_pattern_and_continue",
             type="primary",
             use_container_width=True,
         ):
             st.session_state.confirmed_occupancy_pattern = preview_pattern
+            st.session_state.confirmed_measurement_delta_t = False
             st.session_state.confirmed_richardson = False
             st.session_state.confirmed_wells_riley = False
+            st.session_state.pop("measurement_delta_t_result", None)
             st.session_state.pop("ri_result", None)
             st.session_state.pop("wr_result", None)
-            st.session_state.current_page = "ri"
+            st.session_state.current_page = "measurement"
             st.rerun()
+
+
+
+# =========================================================
+# MEASUREMENT ΔT UPLOAD PAGE
+# =========================================================
+MEASUREMENT_HEIGHT_START = 0.20
+MEASUREMENT_HEIGHT_STEP = 0.10
+MEASUREMENT_EXPECTED_HEIGHT_END = 2.40
+MEASUREMENT_EXPECTED_COUNT = int(round((MEASUREMENT_EXPECTED_HEIGHT_END - MEASUREMENT_HEIGHT_START) / MEASUREMENT_HEIGHT_STEP)) + 1
+RICHARDSON_TOTAL_HEIGHT = 2.70
+
+
+def read_delta_t_from_excel(uploaded_file) -> dict:
+    """Read only the third column of an uploaded Excel file and calculate ΔT.
+
+    The first and second columns are ignored. Non-numeric values in the third
+    column, including a header such as Temperature_C, are automatically skipped.
+    """
+    uploaded_file.seek(0)
+    dataframe = pd.read_excel(uploaded_file, header=None)
+
+    if dataframe.shape[1] < 3:
+        raise ValueError("The uploaded Excel file must contain at least three columns.")
+
+    temperature_values = pd.to_numeric(dataframe.iloc[:, 2], errors="coerce").dropna()
+
+    if temperature_values.empty:
+        raise ValueError("No numeric temperature values were found in the third column.")
+
+    minimum_temperature = float(temperature_values.min())
+    maximum_temperature = float(temperature_values.max())
+    delta_t = maximum_temperature - minimum_temperature
+    number_of_readings = int(temperature_values.shape[0])
+
+    assumed_last_height = MEASUREMENT_HEIGHT_START + MEASUREMENT_HEIGHT_STEP * (number_of_readings - 1)
+
+    return {
+        "file_name": uploaded_file.name,
+        "minimum_temperature": minimum_temperature,
+        "maximum_temperature": maximum_temperature,
+        "delta_t": delta_t,
+        "number_of_readings": number_of_readings,
+        "assumed_first_height": MEASUREMENT_HEIGHT_START,
+        "assumed_last_height": assumed_last_height,
+    }
+
+
+def get_measurement_delta_t_dataframe(delta_t_result: dict) -> pd.DataFrame:
+    """Convert confirmed measurement ΔT results into a display table."""
+    measurement_locations = get_measurement_locations()
+    rows = []
+
+    for measurement_label in [f"M{index}" for index in range(1, 13)]:
+        result = delta_t_result["results"][measurement_label]
+        x_value, y_value = measurement_locations[measurement_label]
+
+        rows.append(
+            {
+                "Measurement": measurement_label,
+                "x (m)": x_value,
+                "y (m)": y_value,
+                "File": result["file_name"],
+                "Readings": result["number_of_readings"],
+                "Min T (°C)": result["minimum_temperature"],
+                "Max T (°C)": result["maximum_temperature"],
+                "ΔT = Max − Min (K or °C)": result["delta_t"],
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def measurement_delta_t_page() -> None:
+    render_page_heading(
+        "📊",
+        "Measurement ΔT Upload",
+        "Upload one Excel file for each measurement location M1–M12 and calculate ΔT from the third column only.",
+    )
+
+    confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
+
+    if not confirmed_pattern:
+        st.warning(
+            "No occupancy pattern has been confirmed. Select and confirm a "
+            "Symmetry Pattern before uploading measurement files."
+        )
+        if st.button("Go to Occupancy Patterns", key="measurement_go_to_occupancy", type="primary"):
+            go_to("occupancy")
+        return
+
+    st.session_state.setdefault("confirmed_measurement_delta_t", False)
+
+    st.markdown(
+        f"""
+        <div class="result-banner">
+            <b>Step 2 of 5</b><br>
+            Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b><br>
+            Upload Excel files for M1–M12. The app reads only column 3 and calculates
+            ΔT = maximum temperature − minimum temperature.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Measurement-location reference")
+    measurement_left, measurement_centre, measurement_right = st.columns([0.80, 4.10, 0.80])
+    with measurement_centre:
+        measurement_fig = create_measurement_locations_figure(confirmed_pattern)
+        st.pyplot(measurement_fig, use_container_width=True)
+        plt.close(measurement_fig)
+
+    st.caption(
+        "Height assumption for each uploaded file: first numeric reading in the third column is at 0.2 m, "
+        "then 0.3 m, 0.4 m, and so on. Expected final reading is at 2.4 m. "
+        "The Richardson characteristic height is kept as 2.7 m by default."
+    )
+
+    st.markdown("### Upload M1–M12 Excel files")
+    st.info(
+        "Upload one file per measurement location. The first and second columns are ignored. "
+        "Only the third column is used for the temperature range calculation."
+    )
+
+    uploaded_files = {}
+    upload_columns = st.columns(3)
+
+    for index in range(1, 13):
+        measurement_label = f"M{index}"
+        with upload_columns[(index - 1) % 3]:
+            uploaded_files[measurement_label] = st.file_uploader(
+                f"{measurement_label} Excel file",
+                type=["xlsx", "xls"],
+                key=f"upload_{measurement_label.lower()}_excel",
+            )
+
+    calculate_left, calculate_centre, calculate_right = st.columns([1, 2.4, 1])
+    with calculate_centre:
+        calculate_delta_t = st.button(
+            "Calculate ΔT for uploaded files",
+            key="calculate_measurement_delta_t",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if calculate_delta_t:
+        missing_files = [
+            measurement_label
+            for measurement_label, uploaded_file in uploaded_files.items()
+            if uploaded_file is None
+        ]
+
+        if missing_files:
+            st.error(
+                "Please upload all 12 files before calculating ΔT. "
+                f"Missing files: {', '.join(missing_files)}."
+            )
+        else:
+            results = {}
+            errors = []
+
+            for measurement_label, uploaded_file in uploaded_files.items():
+                try:
+                    results[measurement_label] = read_delta_t_from_excel(uploaded_file)
+                except Exception as error:
+                    errors.append(f"{measurement_label}: {error}")
+
+            if errors:
+                st.session_state.confirmed_measurement_delta_t = False
+                st.session_state.pop("measurement_delta_t_result", None)
+                for error in errors:
+                    st.error(error)
+            else:
+                st.session_state.measurement_delta_t_result = {
+                    "pattern_name": confirmed_pattern,
+                    "height_start": MEASUREMENT_HEIGHT_START,
+                    "height_step": MEASUREMENT_HEIGHT_STEP,
+                    "expected_height_end": MEASUREMENT_EXPECTED_HEIGHT_END,
+                    "expected_count": MEASUREMENT_EXPECTED_COUNT,
+                    "richardson_total_height": RICHARDSON_TOTAL_HEIGHT,
+                    "results": results,
+                }
+                st.session_state.confirmed_measurement_delta_t = False
+                st.session_state.confirmed_richardson = False
+                st.session_state.confirmed_wells_riley = False
+                st.session_state.pop("ri_result", None)
+                st.session_state.pop("wr_result", None)
+                st.success("ΔT values calculated. Review the table below, then confirm to continue.")
+
+    delta_t_result = st.session_state.get("measurement_delta_t_result")
+
+    if delta_t_result:
+        st.markdown("---")
+        st.markdown("## Calculated ΔT values")
+
+        result_dataframe = get_measurement_delta_t_dataframe(delta_t_result)
+        display_dataframe = result_dataframe.copy()
+        for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]:
+            display_dataframe[column_name] = display_dataframe[column_name].map(lambda value: f"{value:.4f}")
+
+        st.dataframe(display_dataframe, use_container_width=True, hide_index=True)
+
+        average_delta_t = result_dataframe["ΔT = Max − Min (K or °C)"].mean()
+        maximum_delta_t = result_dataframe["ΔT = Max − Min (K or °C)"].max()
+        minimum_delta_t = result_dataframe["ΔT = Max − Min (K or °C)"].min()
+
+        metric1, metric2, metric3, metric4 = st.columns(4)
+        metric1.metric("Files processed", "12")
+        metric2.metric("Average ΔT", f"{average_delta_t:.3f} K")
+        metric3.metric("Minimum ΔT", f"{minimum_delta_t:.3f} K")
+        metric4.metric("Maximum ΔT", f"{maximum_delta_t:.3f} K")
+
+        unexpected_counts = result_dataframe[result_dataframe["Readings"] != MEASUREMENT_EXPECTED_COUNT]
+        if not unexpected_counts.empty:
+            st.warning(
+                f"Expected {MEASUREMENT_EXPECTED_COUNT} numeric readings per file for 0.2 m to 2.4 m at 0.1 m spacing. "
+                "Some uploaded files have a different count. ΔT is still calculated using all numeric values in the third column."
+            )
+
+        results_text_lines = [
+            "ATLiCE — MEASUREMENT DELTA T RESULTS",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "",
+            "Reading rule: third Excel column only; first and second columns ignored.",
+            "Height assumption: first numeric reading = 0.2 m; subsequent readings increase by 0.1 m; expected final height = 2.4 m.",
+            f"Richardson characteristic height used later: {RICHARDSON_TOTAL_HEIGHT:.2f} m.",
+            "",
+            "Measurement, x (m), y (m), File, Readings, Min T (°C), Max T (°C), ΔT (K or °C)",
+        ]
+
+        for _, row in result_dataframe.iterrows():
+            results_text_lines.append(
+                f"{row['Measurement']}, {row['x (m)']:.2f}, {row['y (m)']:.2f}, {row['File']}, "
+                f"{int(row['Readings'])}, {row['Min T (°C)']:.6f}, {row['Max T (°C)']:.6f}, "
+                f"{row['ΔT = Max − Min (K or °C)']:.6f}"
+            )
+
+        results_text = "\n".join(results_text_lines) + "\n"
+
+        action_left, action_centre, action_right = st.columns([1, 2.4, 1])
+        with action_centre:
+            download_text_button(
+                results_text,
+                "atlice_measurement_delta_t_results.txt",
+                "download_measurement_delta_t",
+            )
+
+            if not st.session_state.get("confirmed_measurement_delta_t"):
+                if st.button(
+                    "Confirm ΔT values and continue to Richardson →",
+                    key="confirm_delta_t_continue",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.confirmed_measurement_delta_t = True
+                    st.session_state.confirmed_richardson = False
+                    st.session_state.confirmed_wells_riley = False
+                    st.session_state.current_page = "ri"
+                    st.rerun()
+            else:
+                st.success("Measurement ΔT values confirmed. The Richardson stage is ready.")
+                if st.button(
+                    "Open Richardson Number →",
+                    key="open_ri_from_measurement",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.current_page = "ri"
+                    st.rerun()
 
 
 # =========================================================
@@ -1596,14 +1891,44 @@ ACH: {result['ach']:.2f} h⁻¹
 # =========================================================
 # RICHARDSON NUMBER PAGE
 # =========================================================
+def classify_richardson_number(ri_value: float) -> tuple[str, str]:
+    """Classify one Richardson number value."""
+    if ri_value < 0:
+        return (
+            "Opposing buoyancy direction",
+            "The negative sign indicates that buoyancy acts opposite to the selected reference-flow direction.",
+        )
+    if ri_value < 0.1:
+        return (
+            "Momentum-dominated flow",
+            "Forced-air momentum is likely to dominate over buoyancy for the selected scales.",
+        )
+    if ri_value <= 1:
+        return (
+            "Mixed convection",
+            "Both buoyancy and forced-air momentum are likely to influence the airflow.",
+        )
+    return (
+        "Buoyancy-dominated flow",
+        "Thermal buoyancy is likely to dominate over forced-air momentum for the selected scales.",
+    )
+
+
+def get_richardson_dataframe(ri_result: dict) -> pd.DataFrame:
+    """Convert Richardson result rows into a display table."""
+    return pd.DataFrame(ri_result["ri_table"])
+
+
 def richardson_page() -> None:
     render_page_heading(
         "🌡️",
         "Richardson Number",
-        "Enter the airflow and thermal inputs, calculate the result, and confirm it before continuing.",
+        "Review the twelve imported ΔT values, edit the common Richardson inputs, calculate, and confirm.",
     )
 
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
+    delta_t_result = st.session_state.get("measurement_delta_t_result")
+    delta_t_confirmed = bool(st.session_state.get("confirmed_measurement_delta_t"))
 
     if not confirmed_pattern:
         st.warning(
@@ -1614,21 +1939,44 @@ def richardson_page() -> None:
             go_to("occupancy")
         return
 
+    if not delta_t_result or not delta_t_confirmed:
+        st.warning(
+            "Measurement ΔT values have not been confirmed. Upload M1–M12 Excel files, "
+            "calculate ΔT, and confirm the table before opening Richardson inputs."
+        )
+        if st.button("Go to Measurement ΔT Upload", key="ri_go_to_measurement", type="primary"):
+            go_to("measurement")
+        return
+
+    measurement_dataframe = get_measurement_delta_t_dataframe(delta_t_result)
+
     st.markdown(
         f"""
         <div class="result-banner">
-            <b>Step 2 of 4</b><br>
-            Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b>
+            <b>Step 3 of 5</b><br>
+            Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b><br>
+            Confirmed measurement ΔT values: <b>12 locations</b>. Characteristic height default:
+            <b>{RICHARDSON_TOTAL_HEIGHT:.2f} m</b>.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    st.markdown("### Confirmed ΔT values from M1–M12 Excel files")
+    delta_display = measurement_dataframe[
+        ["Measurement", "x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]
+    ].copy()
+
+    for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]:
+        delta_display[column_name] = delta_display[column_name].map(lambda value: f"{value:.4f}")
+
+    st.dataframe(delta_display, use_container_width=True, hide_index=True)
+
     input_col, guide_col = st.columns([1.45, 1], gap="large")
 
     with input_col:
         with st.form("ri_form"):
-            st.markdown("### Input values")
+            st.markdown("### Editable common Richardson inputs")
             row1a, row1b = st.columns(2)
             gravity = row1a.number_input(
                 "Gravity, g (m/s²)",
@@ -1647,21 +1995,15 @@ def richardson_page() -> None:
             )
 
             row2a, row2b = st.columns(2)
-            delta_t = row2a.number_input(
-                "Temperature difference, ΔT (K or °C)",
-                value=5.0,
-                step=0.1,
-                key="ri_delta_t",
-            )
-            length_scale = row2b.number_input(
-                "Characteristic length, L (m)",
+            length_scale = row2a.number_input(
+                "Characteristic height / length, L (m)",
                 min_value=0.001,
-                value=1.0,
+                value=RICHARDSON_TOTAL_HEIGHT,
                 step=0.1,
                 key="ri_length",
+                help="Default is the total room height of 2.7 m.",
             )
-
-            air_velocity = st.number_input(
+            air_velocity = row2b.number_input(
                 "Representative air velocity, V (m/s)",
                 min_value=0.001,
                 value=0.10,
@@ -1671,7 +2013,7 @@ def richardson_page() -> None:
             )
 
             calculate = st.form_submit_button(
-                "Calculate Richardson Number",
+                "Calculate Richardson Number for all M1–M12 locations",
                 type="primary",
                 use_container_width=True,
             )
@@ -1680,12 +2022,12 @@ def richardson_page() -> None:
         st.markdown(
             """
             <div class="section-card">
-                <h3>Equation</h3>
+                <h3>Equation used for each measurement location</h3>
                 <div class="formula-box"><b>Ri = g α ΔT L / V²</b></div>
                 <p class="small-note">
-                    Use a characteristic length and velocity that represent the
-                    airflow region being assessed. Velocity is squared, so the
-                    result is highly sensitive to the selected velocity.
+                    The ΔT values are taken from the uploaded M1–M12 Excel files.
+                    Gravity, thermal expansion coefficient, characteristic height and
+                    velocity are editable common inputs.
                 </p>
             </div>
             """,
@@ -1701,82 +2043,118 @@ def richardson_page() -> None:
         st.session_state.confirmed_wells_riley = False
         st.session_state.pop("wr_result", None)
 
-        ri = gravity * alpha * delta_t * length_scale / (air_velocity**2)
+        ri_rows = []
+        for _, row in measurement_dataframe.iterrows():
+            delta_t = float(row["ΔT = Max − Min (K or °C)"])
+            ri_value = gravity * alpha * delta_t * length_scale / (air_velocity**2)
+            classification, interpretation = classify_richardson_number(ri_value)
 
-        if ri < 0:
-            classification = "Opposing buoyancy direction"
-            interpretation = (
-                "The negative sign indicates that buoyancy acts opposite to the "
-                "selected reference-flow direction."
+            ri_rows.append(
+                {
+                    "Measurement": row["Measurement"],
+                    "x (m)": float(row["x (m)"]),
+                    "y (m)": float(row["y (m)"]),
+                    "ΔT (K or °C)": delta_t,
+                    "Ri": ri_value,
+                    "Classification": classification,
+                    "Interpretation": interpretation,
+                }
             )
-        elif ri < 0.1:
-            classification = "Momentum-dominated flow"
-            interpretation = (
-                "Forced-air momentum is likely to dominate over buoyancy for the selected scales."
-            )
-        elif ri <= 1:
-            classification = "Mixed convection"
-            interpretation = (
-                "Both buoyancy and forced-air momentum are likely to influence the airflow."
-            )
-        else:
-            classification = "Buoyancy-dominated flow"
-            interpretation = (
-                "Thermal buoyancy is likely to dominate over forced-air momentum for the selected scales."
-            )
+
+        ri_values = [row["Ri"] for row in ri_rows]
+        delta_values = [row["ΔT (K or °C)"] for row in ri_rows]
+
+        maximum_ri_row = max(ri_rows, key=lambda row: row["Ri"])
+        minimum_ri_row = min(ri_rows, key=lambda row: row["Ri"])
+        average_ri = sum(ri_values) / len(ri_values)
+        average_delta_t = sum(delta_values) / len(delta_values)
+        summary_classification, summary_interpretation = classify_richardson_number(average_ri)
 
         st.session_state.ri_result = {
             "gravity": gravity,
             "alpha": alpha,
-            "delta_t": delta_t,
             "length_scale": length_scale,
             "air_velocity": air_velocity,
-            "ri": ri,
-            "classification": classification,
-            "interpretation": interpretation,
+            "ri_table": ri_rows,
+            "ri_average": average_ri,
+            "ri_min": minimum_ri_row["Ri"],
+            "ri_max": maximum_ri_row["Ri"],
+            "delta_t_average": average_delta_t,
+            "delta_t_min": min(delta_values),
+            "delta_t_max": max(delta_values),
+            "max_ri_measurement": maximum_ri_row["Measurement"],
+            "min_ri_measurement": minimum_ri_row["Measurement"],
+            "classification": summary_classification,
+            "interpretation": summary_interpretation,
         }
 
     result = st.session_state.get("ri_result")
     if result:
         st.markdown("---")
-        st.markdown("## Richardson result")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Richardson number", f"{result['ri']:.4f}")
-        m2.metric("Air velocity", f"{result['air_velocity']:.3f} m/s")
-        m3.metric("Temperature difference", f"{result['delta_t']:.2f} K")
+        st.markdown("## Richardson result for M1–M12")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Average Ri", f"{result['ri_average']:.4f}")
+        m2.metric("Minimum Ri", f"{result['ri_min']:.4f}", result["min_ri_measurement"])
+        m3.metric("Maximum Ri", f"{result['ri_max']:.4f}", result["max_ri_measurement"])
+        m4.metric("Average ΔT", f"{result['delta_t_average']:.3f} K")
 
         st.markdown(
             f"""
             <div class="result-banner">
-                <b>{result['classification']}</b><br>
+                <b>Average classification: {result['classification']}</b><br>
                 {result['interpretation']}
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        st.latex(r"Ri = \frac{g\alpha\Delta T L}{V^2}")
-        st.write(
-            f"Substitution: **({result['gravity']:.2f} × {result['alpha']:.5f} × "
-            f"{result['delta_t']:.2f} × {result['length_scale']:.2f}) / "
-            f"({result['air_velocity']:.3f})² = {result['ri']:.4f}**"
+        ri_dataframe = get_richardson_dataframe(result)
+        ri_display = ri_dataframe.copy()
+        for column_name in ["x (m)", "y (m)", "ΔT (K or °C)", "Ri"]:
+            ri_display[column_name] = ri_display[column_name].map(lambda value: f"{value:.5f}")
+        st.dataframe(
+            ri_display[
+                ["Measurement", "x (m)", "y (m)", "ΔT (K or °C)", "Ri", "Classification"]
+            ],
+            use_container_width=True,
+            hide_index=True,
         )
 
-        results_text = f"""ATLiCE — RICHARDSON NUMBER RESULTS
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+        st.latex(r"Ri = \frac{g\alpha\Delta T L}{V^2}")
+        st.write(
+            f"Common inputs used: **g = {result['gravity']:.2f} m/s²**, "
+            f"**α = {result['alpha']:.5f} 1/K**, "
+            f"**L = {result['length_scale']:.2f} m**, "
+            f"**V = {result['air_velocity']:.3f} m/s**."
+        )
 
-INPUTS
-Gravity: {result['gravity']:.4f} m/s²
-Thermal expansion coefficient: {result['alpha']:.6f} 1/K
-Temperature difference: {result['delta_t']:.4f} K
-Characteristic length: {result['length_scale']:.4f} m
-Air velocity: {result['air_velocity']:.4f} m/s
+        results_text_lines = [
+            "ATLiCE — RICHARDSON NUMBER RESULTS",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "",
+            "COMMON INPUTS",
+            f"Gravity: {result['gravity']:.4f} m/s²",
+            f"Thermal expansion coefficient: {result['alpha']:.6f} 1/K",
+            f"Characteristic height / length: {result['length_scale']:.4f} m",
+            f"Air velocity: {result['air_velocity']:.4f} m/s",
+            "",
+            "SUMMARY",
+            f"Average ΔT: {result['delta_t_average']:.6f} K or °C",
+            f"Average Richardson number: {result['ri_average']:.6f}",
+            f"Minimum Richardson number: {result['ri_min']:.6f} at {result['min_ri_measurement']}",
+            f"Maximum Richardson number: {result['ri_max']:.6f} at {result['max_ri_measurement']}",
+            f"Average classification: {result['classification']}",
+            "",
+            "Measurement, x (m), y (m), ΔT (K or °C), Ri, Classification",
+        ]
 
-RESULT
-Richardson number: {result['ri']:.6f}
-Classification: {result['classification']}
-Interpretation: {result['interpretation']}
-"""
+        for row in result["ri_table"]:
+            results_text_lines.append(
+                f"{row['Measurement']}, {row['x (m)']:.2f}, {row['y (m)']:.2f}, "
+                f"{row['ΔT (K or °C)']:.6f}, {row['Ri']:.6f}, {row['Classification']}"
+            )
+
+        results_text = "\n".join(results_text_lines) + "\n"
 
         action_left, action_centre, action_right = st.columns([1, 2.4, 1])
         with action_centre:
@@ -1823,9 +2201,10 @@ def wells_riley_page() -> None:
     st.markdown(
         f"""
         <div class="result-banner">
-            <b>Step 3 of 4</b><br>
+            <b>Step 4 of 5</b><br>
             Pattern: <b>{confirmed_pattern}</b> &nbsp; | &nbsp;
-            Confirmed Richardson number: <b>{ri_result['ri']:.4f}</b>
+            Confirmed Richardson results: <b>12 measurement locations</b> &nbsp; | &nbsp;
+            Average Ri: <b>{ri_result['ri_average']:.4f}</b>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2111,10 +2490,30 @@ def build_complete_report_text(
     pattern_name: str,
     configuration: dict,
     load: dict,
+    measurement_delta_t: dict,
     ri: dict,
     wr: dict,
     measurement_locations: dict,
 ) -> str:
+    measurement_dataframe = get_measurement_delta_t_dataframe(measurement_delta_t)
+    ri_dataframe = get_richardson_dataframe(ri)
+
+    measurement_lines = []
+    for _, row in measurement_dataframe.iterrows():
+        measurement_lines.append(
+            f"{row['Measurement']}: x={row['x (m)']:.2f} m, y={row['y (m)']:.2f} m, "
+            f"file={row['File']}, readings={int(row['Readings'])}, "
+            f"min={row['Min T (°C)']:.4f} °C, max={row['Max T (°C)']:.4f} °C, "
+            f"ΔT={row['ΔT = Max − Min (K or °C)']:.4f} K or °C"
+        )
+
+    ri_lines = []
+    for _, row in ri_dataframe.iterrows():
+        ri_lines.append(
+            f"{row['Measurement']}: ΔT={row['ΔT (K or °C)']:.4f} K or °C, "
+            f"Ri={row['Ri']:.6f}, classification={row['Classification']}"
+        )
+
     return f"""ATLiCE — COMPLETE INDOOR AIR ANALYSIS REPORT
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
@@ -2132,7 +2531,14 @@ Side-wall clearance: {configuration['side_clearance']}
 Main/opposite-wall clearance: {configuration['door_clearance']}
 Measurement grid numbering: M1 starts at the top-right location near the split system; M1-M4 move right-to-left across the top row, M5-M8 move left-to-right across the middle row, and M9-M12 move right-to-left across the bottom row.
 
-2. SENSIBLE LOAD AND AIRFLOW SUMMARY
+2. MEASUREMENT ΔT FROM UPLOADED EXCEL FILES
+Reading rule: only the third Excel column was used. The first and second columns were ignored.
+Height assumption: first numeric reading = 0.2 m; subsequent readings increase by 0.1 m; expected final height = 2.4 m.
+Richardson characteristic height used: {measurement_delta_t['richardson_total_height']:.2f} m.
+
+{chr(10).join(measurement_lines)}
+
+3. SENSIBLE LOAD AND AIRFLOW SUMMARY
 Occupants: {load['occupants']}
 Heat per occupant: {load['heat_per_occupant']:.0f} W
 Total sensible occupant load: {load['total_heat']:.0f} W
@@ -2143,17 +2549,21 @@ Calculated airflow: {load['airflow_ls']:.2f} L/s
 Calculated airflow: {load['airflow_m3h']:.2f} m³/h
 Calculated total supply ACH: {load['ach']:.2f} h⁻¹
 
-3. RICHARDSON NUMBER
+4. RICHARDSON NUMBER FOR M1-M12
 Gravity: {ri['gravity']:.4f} m/s²
 Thermal expansion coefficient: {ri['alpha']:.6f} 1/K
-Temperature difference: {ri['delta_t']:.4f} K
-Characteristic length: {ri['length_scale']:.4f} m
+Characteristic height / length: {ri['length_scale']:.4f} m
 Air velocity: {ri['air_velocity']:.4f} m/s
-Richardson number: {ri['ri']:.6f}
-Classification: {ri['classification']}
-Interpretation: {ri['interpretation']}
+Average ΔT: {ri['delta_t_average']:.6f} K or °C
+Average Richardson number: {ri['ri_average']:.6f}
+Minimum Richardson number: {ri['ri_min']:.6f} at {ri['min_ri_measurement']}
+Maximum Richardson number: {ri['ri_max']:.6f} at {ri['max_ri_measurement']}
+Average classification: {ri['classification']}
+Average interpretation: {ri['interpretation']}
 
-4. WELLS–RILEY SCREENING RESULT
+{chr(10).join(ri_lines)}
+
+5. WELLS–RILEY SCREENING RESULT
 Room airflow: {wr['room_airflow']:.2f} m³/h
 Local ventilation effectiveness: {wr['ventilation_effectiveness']:.4f}
 Infectious people: {wr['infected_people']}
@@ -2166,14 +2576,17 @@ Local infection probability: {wr['p_local'] * 100:.4f}%
 Risk band: {wr['risk_band']}
 
 MODEL LIMITATIONS
-The sensible-load result includes occupant heat only. The Richardson result depends on the selected representative scales. The Wells–Riley result is a steady-state screening estimate and is sensitive to quanta rate and ventilation-effectiveness assumptions.
+The sensible-load result includes occupant heat only. Measurement ΔT is calculated from the uploaded Excel third column only. The Richardson result depends on the selected representative height and velocity. The Wells–Riley result is a steady-state screening estimate and is sensitive to quanta rate and ventilation-effectiveness assumptions.
 """
+
+
 
 
 def build_complete_report_html(
     pattern_name: str,
     configuration: dict,
     load: dict,
+    measurement_delta_t: dict,
     ri: dict,
     wr: dict,
     figure_png: bytes,
@@ -2184,6 +2597,38 @@ def build_complete_report_html(
     encoded_measurement_figure = base64.b64encode(measurement_figure_png).decode("ascii")
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
 
+    measurement_dataframe = get_measurement_delta_t_dataframe(measurement_delta_t)
+    ri_dataframe = get_richardson_dataframe(ri)
+
+    measurement_rows = []
+    for _, row in measurement_dataframe.iterrows():
+        measurement_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(row['Measurement']))}</td>"
+            f"<td>{row['x (m)']:.2f}</td>"
+            f"<td>{row['y (m)']:.2f}</td>"
+            f"<td>{html.escape(str(row['File']))}</td>"
+            f"<td>{int(row['Readings'])}</td>"
+            f"<td>{row['Min T (°C)']:.3f}</td>"
+            f"<td>{row['Max T (°C)']:.3f}</td>"
+            f"<td>{row['ΔT = Max − Min (K or °C)']:.3f}</td>"
+            "</tr>"
+        )
+
+    ri_rows = []
+    for _, row in ri_dataframe.iterrows():
+        ri_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(row['Measurement']))}</td>"
+            f"<td>{row['ΔT (K or °C)']:.3f}</td>"
+            f"<td>{row['Ri']:.5f}</td>"
+            f"<td>{html.escape(str(row['Classification']))}</td>"
+            "</tr>"
+        )
+
+    measurement_rows_html = "\n".join(measurement_rows)
+    ri_rows_html = "\n".join(ri_rows)
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -2192,14 +2637,15 @@ def build_complete_report_html(
 <title>ATLiCE Complete Analysis Report</title>
 <style>
     body {{ font-family: Arial, Helvetica, sans-serif; color: #18312e; margin: 0; background: #eef5f3; }}
-    .page {{ max-width: 940px; margin: 28px auto; background: white; padding: 34px 40px; border-radius: 18px; box-shadow: 0 12px 35px rgba(15, 60, 56, 0.10); }}
+    .page {{ max-width: 980px; margin: 28px auto; background: white; padding: 34px 40px; border-radius: 18px; box-shadow: 0 12px 35px rgba(15, 60, 56, 0.10); }}
     h1 {{ margin: 0; color: #0f766e; }}
     h2 {{ color: #115e59; border-bottom: 1px solid #dbe7e4; padding-bottom: 7px; margin-top: 30px; }}
     .meta {{ color: #64748b; margin: 6px 0 24px; }}
     .figure {{ width: 100%; max-width: 780px; display: block; margin: 15px auto 24px; }}
-    table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
-    th, td {{ text-align: left; padding: 9px 11px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
-    th {{ width: 42%; background: #f8fafc; color: #334155; }}
+    table {{ width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }}
+    th, td {{ text-align: left; padding: 8px 9px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
+    th {{ background: #f8fafc; color: #334155; }}
+    .info-table th {{ width: 42%; }}
     .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }}
     .metric {{ border: 1px solid #dbe7e4; border-radius: 12px; padding: 12px; background: #f8fbfa; }}
     .metric b {{ display: block; color: #64748b; font-size: 12px; margin-bottom: 5px; }}
@@ -2211,70 +2657,90 @@ def build_complete_report_html(
 <body>
 <div class="page">
     <h1>ATLiCE Complete Indoor Air Analysis</h1>
-    <div class="meta">Generated {generated} · Selected pattern: {pattern_name}</div>
+    <div class="meta">Generated {generated} · Selected pattern: {html.escape(pattern_name)}</div>
 
     <img class="figure" src="data:image/png;base64,{encoded_figure}" alt="Selected occupancy configuration">
     <img class="figure" src="data:image/png;base64,{encoded_measurement_figure}" alt="Measurement locations">
 
     <h2>1. Room and occupancy configuration</h2>
-    <table>
-        <tr><th>Pattern group</th><td>{configuration['group']}</td></tr>
-        <tr><th>Selected pattern</th><td>{pattern_name}</td></tr>
-        <tr><th>Arrangement</th><td>{configuration['arrangement']}</td></tr>
+    <table class="info-table">
+        <tr><th>Pattern group</th><td>{html.escape(configuration['group'])}</td></tr>
+        <tr><th>Selected pattern</th><td>{html.escape(pattern_name)}</td></tr>
+        <tr><th>Arrangement</th><td>{html.escape(configuration['arrangement'])}</td></tr>
         <tr><th>Room dimensions</th><td>{ROOM_LENGTH:.2f} m × {ROOM_WIDTH:.2f} m × {ROOM_HEIGHT:.2f} m</td></tr>
         <tr><th>Room volume</th><td>{load['room_volume']:.3f} m³</td></tr>
-        <tr><th>{configuration['spacing_label']}</th><td>{configuration['spacing_value']}</td></tr>
-        <tr><th>{configuration['separation_label']}</th><td>{configuration['separation_value']}</td></tr>
-        <tr><th>Side-wall clearance</th><td>{configuration['side_clearance']}</td></tr>
-        <tr><th>Main/opposite-wall clearance</th><td>{configuration['door_clearance']}</td></tr>
+        <tr><th>{html.escape(configuration['spacing_label'])}</th><td>{html.escape(configuration['spacing_value'])}</td></tr>
+        <tr><th>{html.escape(configuration['separation_label'])}</th><td>{html.escape(configuration['separation_value'])}</td></tr>
+        <tr><th>Side-wall clearance</th><td>{html.escape(configuration['side_clearance'])}</td></tr>
+        <tr><th>Main/opposite-wall clearance</th><td>{html.escape(configuration['door_clearance'])}</td></tr>
         <tr><th>Ventilation units</th><td>S1 and S2 supply units; E1 exhaust unit; each 0.60 m × 0.60 m</td></tr>
         <tr><th>Measurement grid</th><td>M1 starts at the top-right location near the split system; M1-M4 move right-to-left across the top row, M5-M8 move left-to-right across the middle row, and M9-M12 move right-to-left across the bottom row.</td></tr>
         <tr><th>Total measurement locations</th><td>{len(measurement_locations)}</td></tr>
     </table>
 
-    <h2>2. Sensible load and airflow summary</h2>
+    <h2>2. Measurement ΔT from uploaded Excel files</h2>
+    <div class="metrics">
+        <div class="metric"><b>Average ΔT</b><span>{ri['delta_t_average']:.3f}</span></div>
+        <div class="metric"><b>Minimum ΔT</b><span>{ri['delta_t_min']:.3f}</span></div>
+        <div class="metric"><b>Maximum ΔT</b><span>{ri['delta_t_max']:.3f}</span></div>
+    </div>
+    <p>Only the third Excel column was used. The first and second columns were ignored. Height assumption: 0.2 m to 2.4 m at 0.1 m intervals. Richardson characteristic height: {measurement_delta_t['richardson_total_height']:.2f} m.</p>
+    <table>
+        <tr><th>Measurement</th><th>x (m)</th><th>y (m)</th><th>File</th><th>Readings</th><th>Min T</th><th>Max T</th><th>ΔT</th></tr>
+        {measurement_rows_html}
+    </table>
+
+    <h2>3. Sensible load and airflow summary</h2>
     <div class="metrics">
         <div class="metric"><b>Total occupant load</b><span>{load['total_heat']:.0f} W</span></div>
         <div class="metric"><b>Calculated airflow</b><span>{load['airflow_ls']:.1f} L/s</span></div>
         <div class="metric"><b>Total supply ACH</b><span>{load['ach']:.2f}</span></div>
     </div>
-    <table>
+    <table class="info-table">
         <tr><th>Occupants</th><td>{load['occupants']}</td></tr>
         <tr><th>Heat per occupant</th><td>{load['heat_per_occupant']:.0f} W</td></tr>
         <tr><th>Supply / target temperature</th><td>{load['supply_temperature']:.1f} °C / {load['target_temperature']:.1f} °C</td></tr>
         <tr><th>Calculated airflow</th><td>{load['airflow_m3h']:.2f} m³/h</td></tr>
     </table>
 
-    <h2>3. Richardson number</h2>
+    <h2>4. Richardson number for M1-M12</h2>
     <div class="metrics">
-        <div class="metric"><b>Richardson number</b><span>{ri['ri']:.4f}</span></div>
-        <div class="metric"><b>Air velocity</b><span>{ri['air_velocity']:.3f} m/s</span></div>
-        <div class="metric"><b>Classification</b><span style="font-size:15px">{ri['classification']}</span></div>
+        <div class="metric"><b>Average Ri</b><span>{ri['ri_average']:.4f}</span></div>
+        <div class="metric"><b>Minimum Ri</b><span>{ri['ri_min']:.4f}</span></div>
+        <div class="metric"><b>Maximum Ri</b><span>{ri['ri_max']:.4f}</span></div>
     </div>
+    <table class="info-table">
+        <tr><th>Gravity</th><td>{ri['gravity']:.4f} m/s²</td></tr>
+        <tr><th>Thermal expansion coefficient</th><td>{ri['alpha']:.6f} 1/K</td></tr>
+        <tr><th>Characteristic height / length</th><td>{ri['length_scale']:.3f} m</td></tr>
+        <tr><th>Air velocity</th><td>{ri['air_velocity']:.3f} m/s</td></tr>
+        <tr><th>Average classification</th><td>{html.escape(ri['classification'])}</td></tr>
+    </table>
     <table>
-        <tr><th>Temperature difference</th><td>{ri['delta_t']:.3f} K</td></tr>
-        <tr><th>Characteristic length</th><td>{ri['length_scale']:.3f} m</td></tr>
-        <tr><th>Interpretation</th><td>{ri['interpretation']}</td></tr>
+        <tr><th>Measurement</th><th>ΔT</th><th>Ri</th><th>Classification</th></tr>
+        {ri_rows_html}
     </table>
 
-    <h2>4. Wells–Riley screening result</h2>
+    <h2>5. Wells–Riley screening result</h2>
     <div class="metrics">
         <div class="metric"><b>Ideal risk</b><span>{wr['p_ideal'] * 100:.2f}%</span></div>
         <div class="metric"><b>Local risk</b><span>{wr['p_local'] * 100:.2f}%</span></div>
         <div class="metric"><b>Effective local airflow</b><span>{wr['effective_local_airflow']:.1f}</span></div>
     </div>
-    <table>
+    <table class="info-table">
         <tr><th>Room airflow</th><td>{wr['room_airflow']:.2f} m³/h</td></tr>
         <tr><th>Local ventilation effectiveness</th><td>{wr['ventilation_effectiveness']:.3f}</td></tr>
         <tr><th>Infectious people / quanta rate</th><td>{wr['infected_people']} / {wr['quanta_rate']:.2f} quanta/h</td></tr>
         <tr><th>Breathing rate / exposure time</th><td>{wr['breathing_rate']:.2f} m³/h / {wr['exposure_time']:.2f} h</td></tr>
-        <tr><th>Risk band</th><td>{wr['risk_band']}</td></tr>
+        <tr><th>Risk band</th><td>{html.escape(wr['risk_band'])}</td></tr>
     </table>
 
-    <div class="note"><b>Limitations:</b> Occupant sensible heat is the only load included in the automatic load summary. Richardson number depends on representative length and velocity. Wells–Riley is a steady-state screening model and is sensitive to quanta-rate and local ventilation-effectiveness assumptions.</div>
+    <div class="note"><b>Limitations:</b> Occupant sensible heat is the only load included in the automatic load summary. Measurement ΔT is calculated from the uploaded Excel third column only. Richardson number depends on representative height and velocity. Wells–Riley is a steady-state screening model and is sensitive to quanta-rate and local ventilation-effectiveness assumptions.</div>
 </div>
 </body>
 </html>"""
+
+
 
 
 def reset_complete_analysis() -> None:
@@ -2282,12 +2748,14 @@ def reset_complete_analysis() -> None:
     keys_to_remove = [
         "occupancy_preview_pattern",
         "confirmed_occupancy_pattern",
+        "measurement_delta_t_result",
         "ri_result",
         "wr_result",
     ]
     for key in keys_to_remove:
         st.session_state.pop(key, None)
     st.session_state.occupancy_pattern = "Pattern 1"
+    st.session_state.confirmed_measurement_delta_t = False
     st.session_state.confirmed_richardson = False
     st.session_state.confirmed_wells_riley = False
     st.session_state.current_page = "occupancy"
@@ -2297,23 +2765,35 @@ def complete_report_page() -> None:
     render_page_heading(
         "📄",
         "Complete Analysis Report",
-        "Review and download the confirmed occupancy, load, Richardson and Wells–Riley results.",
+        "Review and download the confirmed occupancy, measurement ΔT, Richardson and Wells–Riley results.",
     )
 
     pattern_name = st.session_state.get("confirmed_occupancy_pattern")
+    measurement_delta_t = st.session_state.get("measurement_delta_t_result")
     ri = st.session_state.get("ri_result")
     wr = st.session_state.get("wr_result")
+    measurement_confirmed = bool(st.session_state.get("confirmed_measurement_delta_t"))
     ri_confirmed = bool(st.session_state.get("confirmed_richardson"))
     wr_confirmed = bool(st.session_state.get("confirmed_wells_riley"))
 
-    if not pattern_name or not ri or not wr or not ri_confirmed or not wr_confirmed:
+    if (
+        not pattern_name
+        or not measurement_delta_t
+        or not ri
+        or not wr
+        or not measurement_confirmed
+        or not ri_confirmed
+        or not wr_confirmed
+    ):
         st.warning(
-            "The report is locked until the occupancy pattern, Richardson result "
-            "and Wells–Riley result have all been confirmed."
+            "The report is locked until the occupancy pattern, measurement ΔT values, "
+            "Richardson result and Wells–Riley result have all been confirmed."
         )
         if st.button("Return to guided workflow", key="report_return_workflow", type="primary"):
             if not pattern_name:
                 go_to("occupancy")
+            elif not measurement_confirmed:
+                go_to("measurement")
             elif not ri_confirmed:
                 go_to("ri")
             else:
@@ -2331,8 +2811,8 @@ def complete_report_page() -> None:
     st.markdown(
         f"""
         <div class="result-banner">
-            <b>Step 4 of 4 — complete</b><br>
-            Symmetry Pattern — <b>{pattern_name}</b> and both model results are confirmed.
+            <b>Step 5 of 5 — complete</b><br>
+            Symmetry Pattern — <b>{pattern_name}</b>, measurement ΔT, Richardson and Wells–Riley results are confirmed.
         </div>
         """,
         unsafe_allow_html=True,
@@ -2372,14 +2852,25 @@ def complete_report_page() -> None:
         st.write(f"Calculated total supply ACH: **{load['ach']:.2f} h⁻¹**")
         st.markdown('</div>', unsafe_allow_html=True)
 
+    st.markdown("### Measurement ΔT results")
+    measurement_dataframe = get_measurement_delta_t_dataframe(measurement_delta_t)
+    measurement_display = measurement_dataframe[
+        ["Measurement", "x (m)", "y (m)", "File", "Readings", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]
+    ].copy()
+    for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]:
+        measurement_display[column_name] = measurement_display[column_name].map(lambda value: f"{value:.4f}")
+    st.dataframe(measurement_display, use_container_width=True, hide_index=True)
+
     st.markdown("### Confirmed model results")
     ri_col, wr_col = st.columns(2, gap="large")
     with ri_col:
         st.markdown('<div class="report-section"><h3>Richardson number</h3>', unsafe_allow_html=True)
-        st.metric("Ri", f"{ri['ri']:.4f}")
-        st.write(f"Classification: **{ri['classification']}**")
+        st.metric("Average Ri", f"{ri['ri_average']:.4f}")
+        st.write(f"Average classification: **{ri['classification']}**")
         st.write(f"Velocity: **{ri['air_velocity']:.3f} m/s**")
-        st.write(f"ΔT: **{ri['delta_t']:.2f} K**")
+        st.write(f"Characteristic height: **{ri['length_scale']:.2f} m**")
+        st.write(f"Minimum Ri: **{ri['ri_min']:.4f}** at **{ri['min_ri_measurement']}**")
+        st.write(f"Maximum Ri: **{ri['ri_max']:.4f}** at **{ri['max_ri_measurement']}**")
         st.write(ri["interpretation"])
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2392,11 +2883,27 @@ def complete_report_page() -> None:
         st.write(f"Risk band: **{wr['risk_band']}**")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    report_text = build_complete_report_text(pattern_name, configuration, load, ri, wr, measurement_locations)
+    st.markdown("### Richardson table")
+    ri_dataframe = get_richardson_dataframe(ri)
+    ri_display = ri_dataframe[["Measurement", "x (m)", "y (m)", "ΔT (K or °C)", "Ri", "Classification"]].copy()
+    for column_name in ["x (m)", "y (m)", "ΔT (K or °C)", "Ri"]:
+        ri_display[column_name] = ri_display[column_name].map(lambda value: f"{value:.5f}")
+    st.dataframe(ri_display, use_container_width=True, hide_index=True)
+
+    report_text = build_complete_report_text(
+        pattern_name,
+        configuration,
+        load,
+        measurement_delta_t,
+        ri,
+        wr,
+        measurement_locations,
+    )
     report_html = build_complete_report_html(
         pattern_name,
         configuration,
         load,
+        measurement_delta_t,
         ri,
         wr,
         figure_png,
@@ -2426,8 +2933,8 @@ def complete_report_page() -> None:
         )
 
     st.caption(
-        "The HTML report includes both the selected pattern figure and the measurement-locations figure, "
-        "and can be opened in a browser or printed to PDF."
+        "The HTML report includes the selected pattern figure, measurement-locations figure, "
+        "M1–M12 ΔT table, Richardson table and Wells–Riley result."
     )
 
     restart_left, restart_centre, restart_right = st.columns([1, 2, 1])
@@ -2441,6 +2948,8 @@ def complete_report_page() -> None:
             st.rerun()
 
 
+
+
 # =========================================================
 # PAGE ROUTER
 # =========================================================
@@ -2450,6 +2959,8 @@ if page == "home":
     home_page()
 elif page == "occupancy":
     occupancy_page()
+elif page == "measurement":
+    measurement_delta_t_page()
 elif page == "ach":
     cooling_ach_page()
 elif page == "ri":
