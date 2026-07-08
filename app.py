@@ -606,7 +606,6 @@ SUPPLY_COLOUR = "tab:blue"
 EXHAUST_COLOUR = "tab:green"
 CEILING_GRID_COLOUR = "lightgray"
 DIMENSION_COLOUR = "#475569"
-VENTILATION_DISTANCE_COLOUR = "#7c3aed"
 
 
 def get_pattern_1_positions():
@@ -827,73 +826,6 @@ def draw_ventilation_units(ax):
         )
 
 
-
-
-def draw_ventilation_distance_dimensions(ax):
-    """Mark S1–S2 and S2–E1 centre-to-centre distances on the room figure."""
-    s1_s2_distance = math.hypot(S2_X - S1_X, S2_Y - S1_Y)
-    s2_e1_distance = math.hypot(S2_X - E1_X, S2_Y - E1_Y)
-
-    # S1 to S2 centre-to-centre distance.
-    y_arrow = S1_Y + UNIT_SIZE / 2 + 0.33
-    ax.annotate(
-        "",
-        xy=(S2_X, y_arrow),
-        xytext=(S1_X, y_arrow),
-        arrowprops=dict(
-            arrowstyle="<->",
-            linewidth=1.15,
-            color=VENTILATION_DISTANCE_COLOUR,
-            mutation_scale=10,
-            shrinkA=0,
-            shrinkB=0,
-        ),
-        zorder=10,
-    )
-    ax.plot([S1_X, S1_X], [S1_Y + UNIT_SIZE / 2, y_arrow], color=VENTILATION_DISTANCE_COLOUR, linewidth=0.75, zorder=9)
-    ax.plot([S2_X, S2_X], [S2_Y + UNIT_SIZE / 2, y_arrow], color=VENTILATION_DISTANCE_COLOUR, linewidth=0.75, zorder=9)
-    ax.text(
-        (S1_X + S2_X) / 2,
-        y_arrow + 0.13,
-        f"S1–S2 = {s1_s2_distance:.2f} m",
-        ha="center",
-        va="bottom",
-        fontsize=8.2,
-        fontweight="bold",
-        color=VENTILATION_DISTANCE_COLOUR,
-        bbox=dict(facecolor="white", edgecolor="none", alpha=0.78, pad=0.7),
-        zorder=11,
-    )
-
-    # S2 to E1 centre-to-centre distance.
-    start = (S2_X - UNIT_SIZE / 2 + 0.02, S2_Y - UNIT_SIZE / 2 + 0.02)
-    end = (E1_X + UNIT_SIZE / 2 - 0.02, E1_Y + UNIT_SIZE / 2 - 0.02)
-    ax.annotate(
-        "",
-        xy=end,
-        xytext=start,
-        arrowprops=dict(
-            arrowstyle="<->",
-            linewidth=1.05,
-            color=VENTILATION_DISTANCE_COLOUR,
-            mutation_scale=10,
-            shrinkA=0,
-            shrinkB=0,
-        ),
-        zorder=10,
-    )
-    ax.text(
-        (S2_X + E1_X) / 2 - 0.05,
-        (S2_Y + E1_Y) / 2 - 0.23,
-        f"S2–E1 = {s2_e1_distance:.2f} m",
-        ha="center",
-        va="center",
-        fontsize=8.2,
-        fontweight="bold",
-        color=VENTILATION_DISTANCE_COLOUR,
-        bbox=dict(facecolor="white", edgecolor="none", alpha=0.78, pad=0.7),
-        zorder=11,
-    )
 
 def get_measurement_locations():
     """Return the 12 measurement locations using split-system-side snake numbering.
@@ -1222,7 +1154,6 @@ def create_occupancy_figure(pattern_name: str):
     if show_occupants:
         draw_occupants(ax, positions)
     draw_ventilation_units(ax)
-    draw_ventilation_distance_dimensions(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
     if dimension_function is not None:
@@ -1315,7 +1246,6 @@ def create_measurement_locations_figure(pattern_name: str):
     if show_occupants:
         draw_occupants(ax, positions)
     draw_ventilation_units(ax)
-    draw_ventilation_distance_dimensions(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
     if dimension_function is not None:
@@ -1743,7 +1673,6 @@ def create_measurement_delta_t_map_figure(pattern_name: str, delta_t_result: dic
     if show_occupants:
         draw_occupants(ax, positions)
     draw_ventilation_units(ax)
-    draw_ventilation_distance_dimensions(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
     if dimension_function is not None:
@@ -1883,6 +1812,22 @@ def create_combined_profiles_figure(delta_t_result: dict, selected_items: list[s
     return fig
 
 
+def create_all_individuals_vs_average_figure(delta_t_result: dict):
+    """Create a comparison plot with every uploaded measurement location and Mavg."""
+    uploaded_labels = sorted(
+        delta_t_result.get("results", {}).keys(),
+        key=lambda label: int(label.replace("M", "")),
+    )
+    if not uploaded_labels:
+        raise ValueError("No uploaded measurement locations are available for the all-individuals comparison plot.")
+
+    selected_items = uploaded_labels + ["Mavg"]
+    fig = create_combined_profiles_figure(delta_t_result, selected_items)
+    ax = fig.axes[0]
+    ax.set_title("All uploaded measurement locations vs Mavg", fontsize=13, fontweight="bold")
+    return fig
+
+
 
 def measurement_delta_t_page() -> None:
     render_page_heading(
@@ -1999,6 +1944,7 @@ def measurement_delta_t_page() -> None:
                 st.session_state.pop("confirmed_delta_map_plot", None)
                 st.session_state.pop("confirmed_individual_plot_label", None)
                 st.session_state.pop("confirmed_compare_plot_items", None)
+                st.session_state.pop("confirmed_all_vs_average_plot", None)
                 st.success(
                     f"ΔT values calculated for {len(results)} uploaded location(s). "
                     "Review the table, then confirm whichever plots you need."
@@ -2051,8 +1997,13 @@ def measurement_delta_t_page() -> None:
         st.markdown("### Plot windows")
         st.caption("Plots are hidden until you select the required options and press the relevant Confirm button.")
 
-        tab_map, tab_individual, tab_compare = st.tabs(
-            ["ΔT map", "Individual location plot", "Compare selected locations"]
+        tab_map, tab_single, tab_compare, tab_all_average = st.tabs(
+            [
+                "ΔT map",
+                "Single profile",
+                "Individual comparison",
+                "All individuals vs Mavg",
+            ]
         )
 
         with tab_map:
@@ -2087,41 +2038,56 @@ def measurement_delta_t_page() -> None:
                     use_container_width=True,
                 )
 
-        with tab_individual:
+        with tab_single:
             uploaded_labels = sorted(
                 delta_t_result["results"].keys(),
                 key=lambda label: int(label.replace("M", "")),
             )
-            selected_label = st.selectbox(
-                "Select one uploaded measurement location",
-                options=uploaded_labels,
-                key="selected_individual_measurement_plot",
+            single_options = uploaded_labels + ["Mavg"]
+            selected_single_item = st.selectbox(
+                "Select one profile to display",
+                options=single_options,
+                help="Choose an uploaded measurement location or Mavg, then press Confirm.",
+                key="selected_single_profile_plot",
             )
 
             if st.button(
-                "Confirm and show individual plot",
-                key="confirm_individual_plot_button",
+                "Confirm and show selected profile",
+                key="confirm_single_profile_plot_button",
                 type="primary",
                 use_container_width=True,
             ):
-                st.session_state.confirmed_individual_plot_label = selected_label
+                st.session_state.confirmed_individual_plot_label = selected_single_item
 
-            confirmed_label = st.session_state.get("confirmed_individual_plot_label")
-            if confirmed_label:
-                if confirmed_label not in delta_t_result["results"]:
-                    st.warning("The confirmed location is no longer available. Please select and confirm again.")
-                else:
-                    selected_result = delta_t_result["results"][confirmed_label]
-                    profile_fig = create_temperature_profile_figure(confirmed_label, selected_result)
+            confirmed_single_item = st.session_state.get("confirmed_individual_plot_label")
+            if confirmed_single_item:
+                if confirmed_single_item == "Mavg":
+                    profile_fig = create_room_average_profile_figure(delta_t_result)
                     st.pyplot(profile_fig, use_container_width=True)
                     profile_png = figure_to_png(profile_fig)
                     plt.close(profile_fig)
                     st.download_button(
-                        label=f"⬇ Download {confirmed_label} height-temperature plot",
+                        label="⬇ Download Mavg height-temperature plot",
                         data=profile_png,
-                        file_name=f"atlice_{confirmed_label.lower()}_height_temperature_plot.png",
+                        file_name="atlice_mavg_height_temperature_plot.png",
                         mime="image/png",
-                        key=f"download_{confirmed_label.lower()}_profile_plot",
+                        key="download_mavg_single_profile_plot",
+                        use_container_width=True,
+                    )
+                elif confirmed_single_item not in delta_t_result["results"]:
+                    st.warning("The confirmed location is no longer available. Please select and confirm again.")
+                else:
+                    selected_result = delta_t_result["results"][confirmed_single_item]
+                    profile_fig = create_temperature_profile_figure(confirmed_single_item, selected_result)
+                    st.pyplot(profile_fig, use_container_width=True)
+                    profile_png = figure_to_png(profile_fig)
+                    plt.close(profile_fig)
+                    st.download_button(
+                        label=f"⬇ Download {confirmed_single_item} height-temperature plot",
+                        data=profile_png,
+                        file_name=f"atlice_{confirmed_single_item.lower()}_height_temperature_plot.png",
+                        mime="image/png",
+                        key=f"download_{confirmed_single_item.lower()}_profile_plot",
                         use_container_width=True,
                     )
 
@@ -2136,10 +2102,10 @@ def measurement_delta_t_page() -> None:
                 default_options = default_options + ["Mavg"]
 
             selected_compare_items = st.multiselect(
-                "Select locations to compare",
+                "Select locations or Mavg to compare",
                 options=all_options,
                 default=default_options,
-                help="Mavg is the room-average height-temperature profile from all uploaded locations.",
+                help="M1–M12 are selectable. Locations without uploaded data are skipped. Mavg is the average profile from all uploaded files.",
                 key="selected_compare_measurement_plots",
             )
 
@@ -2154,7 +2120,7 @@ def measurement_delta_t_page() -> None:
                 )
 
             if st.button(
-                "Confirm and show comparison plot",
+                "Confirm and show selected comparison",
                 key="confirm_compare_plot_button",
                 type="primary",
                 use_container_width=True,
@@ -2184,20 +2150,49 @@ def measurement_delta_t_page() -> None:
                     use_container_width=True,
                 )
 
-                if "Mavg" in confirmed_compare_items:
-                    st.markdown("#### Mavg reference plot")
-                    average_fig = create_room_average_profile_figure(delta_t_result)
-                    st.pyplot(average_fig, use_container_width=True)
-                    average_png = figure_to_png(average_fig)
-                    plt.close(average_fig)
-                    st.download_button(
-                        label="⬇ Download Mavg plot",
-                        data=average_png,
-                        file_name="atlice_mavg_room_average_height_temperature_plot.png",
-                        mime="image/png",
-                        key="download_room_average_plot",
-                        use_container_width=True,
-                    )
+                st.markdown(
+                    f"""
+                    <div class="result-banner">
+                        <b>Temperature summary from uploaded locations</b><br>
+                        Higher-end T: <b>{room_stats['highest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
+                        Lower-end T: <b>{room_stats['lowest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
+                        Room mean T: <b>{room_stats['room_mean_temperature']:.3f} °C</b>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        with tab_all_average:
+            st.markdown(
+                """
+                <div class="section-card">
+                    <h3>All individuals vs Mavg</h3>
+                    <p>Shows every uploaded measurement-location profile together with the Mavg room-average profile.</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "Confirm and show all individuals vs Mavg",
+                key="confirm_all_vs_average_plot_button",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.confirmed_all_vs_average_plot = True
+
+            if st.session_state.get("confirmed_all_vs_average_plot"):
+                all_average_fig = create_all_individuals_vs_average_figure(delta_t_result)
+                st.pyplot(all_average_fig, use_container_width=True)
+                all_average_png = figure_to_png(all_average_fig)
+                plt.close(all_average_fig)
+                st.download_button(
+                    label="⬇ Download all individuals vs Mavg plot",
+                    data=all_average_png,
+                    file_name="atlice_all_individuals_vs_mavg.png",
+                    mime="image/png",
+                    key="download_all_individuals_vs_mavg_plot",
+                    use_container_width=True,
+                )
 
                 st.markdown(
                     f"""
@@ -3358,6 +3353,7 @@ def reset_complete_analysis() -> None:
         "confirmed_delta_map_plot",
         "confirmed_individual_plot_label",
         "confirmed_compare_plot_items",
+        "confirmed_all_vs_average_plot",
     ]
     for key in keys_to_remove:
         st.session_state.pop(key, None)
