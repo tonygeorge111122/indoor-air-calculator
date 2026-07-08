@@ -303,6 +303,89 @@ def apply_custom_css() -> None:
             color: var(--atlice-primary-dark);
         }
 
+
+        .hero-visual-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1rem;
+            margin: 1.1rem 0 1.4rem 0;
+        }
+
+        .visual-tile {
+            min-height: 150px;
+            border-radius: 22px;
+            padding: 1.15rem;
+            color: #ffffff;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+            border: 1px solid rgba(255,255,255,0.22);
+        }
+
+        .visual-tile::after {
+            content: "";
+            position: absolute;
+            width: 132px;
+            height: 132px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.14);
+            right: -45px;
+            top: -45px;
+        }
+
+        .visual-tile .big-icon {
+            font-size: 2.65rem;
+            line-height: 1;
+            margin-bottom: 0.7rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .visual-tile h4 {
+            margin: 0 0 0.25rem 0;
+            color: #ffffff;
+            font-size: 1.02rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .visual-tile p {
+            margin: 0;
+            color: rgba(255,255,255,0.86);
+            font-size: 0.86rem;
+            line-height: 1.45;
+            position: relative;
+            z-index: 1;
+        }
+
+        .tile-air { background: linear-gradient(135deg, #0f766e, #14b8a6); }
+        .tile-human { background: linear-gradient(135deg, #1e3a8a, #38bdf8); }
+        .tile-earth { background: linear-gradient(135deg, #166534, #84cc16); }
+        .tile-factory { background: linear-gradient(135deg, #334155, #0f766e); }
+
+        .stage-card {
+            padding: 1rem 1.1rem;
+            border-radius: 18px;
+            background: rgba(255,255,255,0.92);
+            border: 1px solid var(--atlice-border);
+            box-shadow: 0 8px 22px rgba(15,23,42,0.045);
+            min-height: 112px;
+        }
+
+        .stage-card b {
+            color: var(--atlice-primary-dark);
+        }
+
+        .plot-control-card {
+            padding: 1.1rem;
+            border-radius: 18px;
+            background: rgba(255,255,255,0.94);
+            border: 1px solid var(--atlice-border);
+            box-shadow: 0 8px 22px rgba(15,23,42,0.045);
+            margin-bottom: 1rem;
+        }
+
+
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         </style>
@@ -319,9 +402,9 @@ apply_custom_css()
 # =========================================================
 PAGES = {
     "Home": "home",
+    "Cooling & ACH": "ach",
     "Occupancy Patterns": "occupancy",
     "Measurement ΔT Upload": "measurement",
-    "Cooling & ACH": "ach",
     "Richardson Number": "ri",
     "Wells–Riley Risk": "wells_riley",
     "Final Report": "report",
@@ -335,6 +418,7 @@ if "current_page" not in st.session_state:
 def go_to(page_name: str) -> None:
     st.session_state.current_page = page_name
     st.rerun()
+
 
 
 def render_sidebar() -> None:
@@ -358,13 +442,17 @@ def render_sidebar() -> None:
         if st.button("⌂  ATLiCE Home", key="nav_home", use_container_width=True):
             go_to("home")
 
+        st.markdown("### First calculator")
+        if st.button("1  ❄️  Cooling & ACH", key="nav_ach", use_container_width=True):
+            go_to("ach")
+
         st.markdown("### Guided workflow")
 
-        if st.button("1  👥  Occupancy Pattern", key="nav_occupancy", use_container_width=True):
+        if st.button("2  👥  Occupancy Pattern", key="nav_occupancy", use_container_width=True):
             go_to("occupancy")
 
         if st.button(
-            "2  📊  Measurement ΔT Upload",
+            "3  📊  Measurement ΔT Upload",
             key="nav_measurement",
             use_container_width=True,
             disabled=not bool(confirmed_pattern),
@@ -372,7 +460,7 @@ def render_sidebar() -> None:
             go_to("measurement")
 
         if st.button(
-            "3  🌡️  Richardson Number",
+            "4  🌡️  Richardson Number",
             key="nav_ri",
             use_container_width=True,
             disabled=not measurement_ready,
@@ -380,7 +468,7 @@ def render_sidebar() -> None:
             go_to("ri")
 
         if st.button(
-            "4  🫁  Wells–Riley Risk",
+            "5  🫁  Wells–Riley Risk",
             key="nav_wr",
             use_container_width=True,
             disabled=not ri_ready,
@@ -388,7 +476,7 @@ def render_sidebar() -> None:
             go_to("wells_riley")
 
         if st.button(
-            "5  📄  Final Report",
+            "6  📄  Final Report",
             key="nav_report",
             use_container_width=True,
             disabled=not wells_ready,
@@ -405,6 +493,7 @@ def render_sidebar() -> None:
             f"""
             <div class="workflow-status">
                 <b>Progress</b><br>
+                Cooling & ACH: standalone<br>
                 Occupancy: {pattern_status}<br>
                 Measurement ΔT: {measurement_status}<br>
                 Richardson: {ri_status}<br>
@@ -415,24 +504,18 @@ def render_sidebar() -> None:
             unsafe_allow_html=True,
         )
 
-        st.markdown("### Standalone calculator")
-        if st.button("❄️  Cooling & ACH", key="nav_ach", use_container_width=True):
-            go_to("ach")
-
         st.markdown("---")
         st.markdown(
             """
             <div class="small-note" style="color:rgba(255,255,255,0.72);">
-                Complete each guided stage and confirm its result before moving
-                to the next stage. Excel uploads are read only from the third column
-                to calculate ΔT for uploaded locations.
+                Start with Cooling & ACH if required, then complete the guided
+                workflow. Plots appear only after selecting and confirming the
+                desired plot options.
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-
-render_sidebar()
 
 
 # =========================================================
@@ -465,6 +548,7 @@ def download_text_button(text: str, file_name: str, key: str) -> None:
 # =========================================================
 # HOME PAGE
 # =========================================================
+
 def home_page() -> None:
     st.markdown(
         """
@@ -472,17 +556,48 @@ def home_page() -> None:
             <div class="eyebrow">Indoor Air Analysis Platform</div>
             <h1>ATLiCE</h1>
             <p>
-                A focused toolkit for configuring occupant arrangements, estimating
-                cooling airflow and air changes, evaluating buoyancy-to-momentum effects,
-                and screening airborne infection risk using the Wells–Riley model.
+                A visual toolkit for indoor-air experiments: cooling airflow and ACH,
+                occupancy pattern selection, thermal-profile ΔT extraction, Richardson
+                number screening, and Wells–Riley exposure-risk estimation.
             </p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("## Choose a tool")
-    st.caption("Choose an occupancy symmetry pattern first, preview it, upload uploaded locations measurement files, and then continue to the Richardson calculation.")
+    st.markdown(
+        """
+        <div class="hero-visual-grid">
+            <div class="visual-tile tile-air">
+                <div class="big-icon">🌬️</div>
+                <h4>Indoor air quality</h4>
+                <p>Track airflow, thermal gradients and ventilation response.</p>
+            </div>
+            <div class="visual-tile tile-human">
+                <div class="big-icon">👥</div>
+                <h4>Human heat loads</h4>
+                <p>Compare occupied and null-pattern thermal behaviour.</p>
+            </div>
+            <div class="visual-tile tile-earth">
+                <div class="big-icon">🌍</div>
+                <h4>Healthy indoor climate</h4>
+                <p>Connect room-level measurements with comfort and exposure.</p>
+            </div>
+            <div class="visual-tile tile-factory">
+                <div class="big-icon">🏭🌳</div>
+                <h4>Sustainable ventilation</h4>
+                <p>Balance cooling demand, ventilation and environmental impact.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("## Start here")
+    st.caption(
+        "Cooling & ACH is placed first. Then use the guided workflow for pattern selection, "
+        "Excel-based ΔT extraction, confirmed plots, Richardson analysis and Wells–Riley screening."
+    )
 
     col1, col2, col3 = st.columns(3, gap="large")
 
@@ -491,10 +606,10 @@ def home_page() -> None:
             """
             <div class="tool-card">
                 <div class="tool-icon">❄️</div>
-                <h3>Cooling & ACH</h3>
+                <h3>1. Cooling & ACH</h3>
                 <p>
-                    Calculate sensible cooling airflow, airflow in three common
-                    units, and the corresponding air changes per hour.
+                    Calculate sensible cooling airflow, airflow in L/s and m³/h,
+                    and the corresponding air changes per hour.
                 </p>
             </div>
             """,
@@ -507,74 +622,52 @@ def home_page() -> None:
         st.markdown(
             """
             <div class="tool-card">
-                <div class="tool-icon">🌡️</div>
-                <h3>Richardson Number</h3>
+                <div class="tool-icon">👥</div>
+                <h3>2. Occupancy pattern</h3>
                 <p>
-                    Compare thermal buoyancy with forced-air momentum and classify
-                    the likely dominant airflow mechanism.
+                    Select Pattern 1, Pattern 2 or Null Pattern. The layout shows
+                    occupants, measurement locations, and S1–S2 / S2–E1 distances.
                 </p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Open Richardson Tool →", key="home_ri", type="primary", use_container_width=True):
-            go_to("ri")
+        if st.button("Open Occupancy Patterns →", key="home_occupancy", type="primary", use_container_width=True):
+            go_to("occupancy")
 
     with col3:
         st.markdown(
             """
             <div class="tool-card">
-                <div class="tool-icon">🫁</div>
-                <h3>Wells–Riley Risk</h3>
+                <div class="tool-icon">📊</div>
+                <h3>3. Measurement plots</h3>
                 <p>
-                    Estimate ideal well-mixed and local infection probabilities
-                    using airflow and local ventilation effectiveness.
+                    Upload any available M1–M12 Excel files, calculate ΔT, then
+                    confirm individual or comparison plots including Mavg.
                 </p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Open Wells–Riley Tool →", key="home_wr", type="primary", use_container_width=True):
-            go_to("wells_riley")
+        if st.button("Open Measurement ΔT →", key="home_measurement", type="primary", use_container_width=True):
+            go_to("measurement")
 
-    st.markdown("### Occupancy configuration")
-    occupancy_card, occupancy_note = st.columns([1.45, 1], gap="large")
-
-    with occupancy_card:
-        st.markdown(
-            """
-            <div class="tool-card" style="min-height:210px;">
-                <div class="tool-icon">👥</div>
-                <h3>Occupancy Patterns</h3>
-                <p>
-                    Choose Pattern 1, Pattern 2, or Null Pattern under the Symmetry Pattern
-                    group, preview the selected layout, and confirm it before
-                    continuing to the measurement ΔT upload stage.
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Open Occupancy Patterns →",
-            key="home_occupancy",
-            type="primary",
-            use_container_width=True,
-        ):
-            go_to("occupancy")
-
-    with occupancy_note:
-        st.info(
-            "**Workflow:** Select a Symmetry Pattern → confirm the displayed pattern "
-            "→ upload uploaded locations Excel files → calculate and confirm ΔT "
-            "→ continue to Richardson inputs."
-        )
+    st.markdown("### Guided stages")
+    s1, s2, s3, s4 = st.columns(4, gap="medium")
+    with s1:
+        st.markdown('<div class="stage-card"><b>Occupancy</b><br>Choose Pattern 1, Pattern 2 or Null Pattern.</div>', unsafe_allow_html=True)
+    with s2:
+        st.markdown('<div class="stage-card"><b>Measurement ΔT</b><br>Upload available Excel files and confirm plots.</div>', unsafe_allow_html=True)
+    with s3:
+        st.markdown('<div class="stage-card"><b>Richardson</b><br>Use confirmed ΔT values with editable inputs.</div>', unsafe_allow_html=True)
+    with s4:
+        st.markdown('<div class="stage-card"><b>Final report</b><br>Download the complete indoor-air analysis.</div>', unsafe_allow_html=True)
 
     st.markdown("### Model scope")
     info1, info2, info3 = st.columns(3)
     info1.info("**Cooling model:** sensible heat only; latent and envelope loads are not included.")
-    info2.info("**Richardson model:** uses the specified characteristic length and representative velocity.")
-    info3.info("**Wells–Riley model:** assumes steady conditions and does not replace detailed exposure assessment.")
+    info2.info("**Thermal plots:** third Excel column only; height starts at 0.2 m with 0.1 m spacing.")
+    info3.info("**Risk model:** Wells–Riley is a screening estimate, not a clinical prediction.")
 
 
 
@@ -824,6 +917,76 @@ def draw_ventilation_units(ax):
             fontweight="bold",
             zorder=5,
         )
+
+
+
+
+def draw_ventilation_distance_dimensions(ax):
+    """Mark S1–S2 and S2–E1 centre-to-centre distances on the room layout."""
+    s1_s2_distance = abs(S2_X - S1_X)
+    s2_e1_distance = math.sqrt((S2_X - E1_X) ** 2 + (S2_Y - E1_Y) ** 2)
+
+    # S1 to S2 horizontal distance. Place the arrow slightly above the units
+    # so it does not hide the supply labels.
+    arrow_y = S1_Y + UNIT_SIZE / 2 + 0.42
+    ax.annotate(
+        "",
+        xy=(S2_X, arrow_y),
+        xytext=(S1_X, arrow_y),
+        arrowprops=dict(
+            arrowstyle="<->",
+            linewidth=1.15,
+            color=DIMENSION_COLOUR,
+            mutation_scale=10,
+            shrinkA=0,
+            shrinkB=0,
+        ),
+        zorder=8,
+    )
+    ax.plot([S1_X, S1_X], [S1_Y + UNIT_SIZE / 2, arrow_y], color=DIMENSION_COLOUR, linewidth=0.65, zorder=7)
+    ax.plot([S2_X, S2_X], [S2_Y + UNIT_SIZE / 2, arrow_y], color=DIMENSION_COLOUR, linewidth=0.65, zorder=7)
+    ax.text(
+        (S1_X + S2_X) / 2,
+        arrow_y + 0.10,
+        f"S1–S2 = {s1_s2_distance:.2f} m",
+        ha="center",
+        va="bottom",
+        fontsize=8.2,
+        color=DIMENSION_COLOUR,
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.78, pad=0.8),
+        zorder=9,
+    )
+
+    # S2 to exhaust distance. Use a dashed diagonal centre-to-centre dimension.
+    ax.annotate(
+        "",
+        xy=(E1_X, E1_Y),
+        xytext=(S2_X, S2_Y),
+        arrowprops=dict(
+            arrowstyle="<->",
+            linewidth=1.05,
+            linestyle="--",
+            color=DIMENSION_COLOUR,
+            mutation_scale=10,
+            shrinkA=14,
+            shrinkB=14,
+        ),
+        zorder=7,
+    )
+    mid_x = (S2_X + E1_X) / 2
+    mid_y = (S2_Y + E1_Y) / 2
+    ax.text(
+        mid_x + 0.16,
+        mid_y - 0.12,
+        f"S2–E1 = {s2_e1_distance:.2f} m",
+        ha="center",
+        va="center",
+        fontsize=8.0,
+        rotation=22,
+        color=DIMENSION_COLOUR,
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.78, pad=0.8),
+        zorder=9,
+    )
 
 
 def get_measurement_locations():
@@ -1153,6 +1316,7 @@ def create_occupancy_figure(pattern_name: str):
     if show_occupants:
         draw_occupants(ax, positions)
     draw_ventilation_units(ax)
+    draw_ventilation_distance_dimensions(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
     if dimension_function is not None:
@@ -1245,6 +1409,7 @@ def create_measurement_locations_figure(pattern_name: str):
     if show_occupants:
         draw_occupants(ax, positions)
     draw_ventilation_units(ax)
+    draw_ventilation_distance_dimensions(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
     if dimension_function is not None:
@@ -1669,6 +1834,7 @@ def create_measurement_delta_t_map_figure(pattern_name: str, delta_t_result: dic
     if show_occupants:
         draw_occupants(ax, positions)
     draw_ventilation_units(ax)
+    draw_ventilation_distance_dimensions(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
     if dimension_function is not None:
@@ -1688,18 +1854,28 @@ def create_measurement_delta_t_map_figure(pattern_name: str, delta_t_result: dic
     return fig
 
 
+
 def create_temperature_profile_figure(measurement_label: str, result: dict):
-    """Create a height-temperature plot for one measurement location."""
+    """Create a high-quality height-temperature plot for one measurement location."""
     profile_dataframe = pd.DataFrame(result.get("profile", []))
     if profile_dataframe.empty:
         raise ValueError(f"No profile data found for {measurement_label}.")
 
-    fig, ax = plt.subplots(figsize=(6.8, 6.0))
-    ax.plot(profile_dataframe["temperature"], profile_dataframe["height"], marker="o", linewidth=1.8)
-    ax.set_xlabel("Temperature (°C)")
-    ax.set_ylabel("Height (m)")
-    ax.set_title(f"{measurement_label} height vs temperature")
-    ax.grid(True, alpha=0.28)
+    fig, ax = plt.subplots(figsize=(7.0, 6.2))
+    fig.patch.set_facecolor("white")
+    ax.plot(
+        profile_dataframe["temperature"],
+        profile_dataframe["height"],
+        marker="o",
+        linewidth=2.2,
+        markersize=5.2,
+        label=measurement_label,
+    )
+    ax.set_xlabel("Temperature (°C)", fontsize=11)
+    ax.set_ylabel("Height (m)", fontsize=11)
+    ax.set_title(f"{measurement_label}: height vs temperature", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=10)
+    ax.grid(True, alpha=0.30, linewidth=0.8)
 
     annotation = (
         f"ΔT = {result['delta_t']:.3f} K\n"
@@ -1714,64 +1890,115 @@ def create_temperature_profile_figure(measurement_label: str, result: dict):
         transform=ax.transAxes,
         ha="left",
         va="top",
-        bbox=dict(facecolor="white", edgecolor="#dbe7e4", alpha=0.90, boxstyle="round,pad=0.4"),
+        fontsize=9.2,
+        bbox=dict(facecolor="white", edgecolor="#dbe7e4", alpha=0.92, boxstyle="round,pad=0.45"),
     )
+    ax.legend(loc="lower right", fontsize=9, frameon=True)
     fig.tight_layout()
     return fig
 
 
+
 def create_room_average_profile_figure(delta_t_result: dict):
-    """Create room-average height-temperature plot."""
+    """Create high-quality room-average height-temperature plot."""
     average_dataframe = get_room_average_profile_dataframe(delta_t_result)
     if average_dataframe.empty:
         raise ValueError("No profile data available to build room-average plot.")
 
-    fig, ax = plt.subplots(figsize=(6.8, 6.0))
-    ax.plot(average_dataframe["Average Temperature (°C)"], average_dataframe["Height (m)"], marker="o", linewidth=2.2)
-    ax.set_xlabel("Room average temperature (°C)")
-    ax.set_ylabel("Height (m)")
-    ax.set_title("Room average height vs temperature")
-    ax.grid(True, alpha=0.28)
+    room_stats = get_room_temperature_statistics(delta_t_result)
+
+    fig, ax = plt.subplots(figsize=(7.0, 6.2))
+    fig.patch.set_facecolor("white")
+    ax.plot(
+        average_dataframe["Average Temperature (°C)"],
+        average_dataframe["Height (m)"],
+        marker="s",
+        linewidth=2.8,
+        markersize=5.8,
+        label="Mavg",
+    )
+    ax.set_xlabel("Room average temperature (°C)", fontsize=11)
+    ax.set_ylabel("Height (m)", fontsize=11)
+    ax.set_title("Mavg: room-average height vs temperature", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=10)
+    ax.grid(True, alpha=0.30, linewidth=0.8)
+
+    annotation = (
+        f"Higher-end T = {room_stats['highest_temperature']:.3f} °C\n"
+        f"Lower-end T = {room_stats['lowest_temperature']:.3f} °C\n"
+        f"Room mean T = {room_stats['room_mean_temperature']:.3f} °C"
+    )
+    ax.text(
+        0.03,
+        0.97,
+        annotation,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9.2,
+        bbox=dict(facecolor="white", edgecolor="#dbe7e4", alpha=0.92, boxstyle="round,pad=0.45"),
+    )
+    ax.legend(loc="lower right", fontsize=9, frameon=True)
     fig.tight_layout()
     return fig
 
 
-def create_combined_profiles_figure(delta_t_result: dict):
-    """Create one comparison plot with every uploaded location and the room-average profile."""
+def create_combined_profiles_figure(delta_t_result: dict, selected_items=None):
+    """Create a comparison plot for selected M1–M12 locations and optional Mavg."""
+    if selected_items is None:
+        selected_items = []
+
     profile_dataframe = get_measurement_profile_dataframe(delta_t_result)
     average_dataframe = get_room_average_profile_dataframe(delta_t_result)
 
     if profile_dataframe.empty:
         raise ValueError("No profile data available to build comparison plot.")
 
-    fig, ax = plt.subplots(figsize=(8.2, 6.2))
+    selected_items = list(selected_items)
+    uploaded_labels = sorted(
+        delta_t_result.get("results", {}).keys(),
+        key=lambda label: int(label.replace("M", "")),
+    )
 
-    for measurement_label, group in profile_dataframe.groupby("Measurement"):
-        group = group.sort_values("Height (m)")
+    selected_measurements = [item for item in selected_items if item in uploaded_labels]
+    include_average = "Mavg" in selected_items
+
+    if not selected_measurements and not include_average:
+        raise ValueError("Select at least one uploaded measurement location or Mavg before confirming the comparison plot.")
+
+    fig, ax = plt.subplots(figsize=(8.6, 6.4))
+    fig.patch.set_facecolor("white")
+
+    for measurement_label in selected_measurements:
+        group = profile_dataframe[profile_dataframe["Measurement"] == measurement_label].sort_values("Height (m)")
         ax.plot(
             group["Temperature (°C)"],
             group["Height (m)"],
             marker="o",
-            linewidth=1.1,
-            alpha=0.65,
+            linewidth=1.8,
+            markersize=4.8,
             label=measurement_label,
         )
 
-    if not average_dataframe.empty:
+    if include_average:
+        if average_dataframe.empty:
+            raise ValueError("Mavg cannot be plotted because no uploaded profile data are available.")
         ax.plot(
             average_dataframe["Average Temperature (°C)"],
             average_dataframe["Height (m)"],
             marker="s",
-            linewidth=2.8,
+            linewidth=3.0,
+            markersize=5.6,
             color="black",
-            label="Room average",
+            label="Mavg",
         )
 
-    ax.set_xlabel("Temperature (°C)")
-    ax.set_ylabel("Height (m)")
-    ax.set_title("All uploaded locations with room-average profile")
-    ax.grid(True, alpha=0.28)
-    ax.legend(loc="best", fontsize=8, ncol=2)
+    ax.set_xlabel("Temperature (°C)", fontsize=11)
+    ax.set_ylabel("Height (m)", fontsize=11)
+    ax.set_title("Selected height–temperature profiles", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=10)
+    ax.grid(True, alpha=0.30, linewidth=0.8)
+    ax.legend(loc="best", fontsize=9, frameon=True)
     fig.tight_layout()
     return fig
 
@@ -1781,7 +2008,7 @@ def measurement_delta_t_page() -> None:
     render_page_heading(
         "📊",
         "Measurement ΔT Upload",
-        "Upload Excel files for any measurement locations and calculate ΔT from the third column only.",
+        "Upload Excel files for any measurement locations, calculate ΔT from the third column, then confirm the required plots.",
     )
 
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
@@ -1802,7 +2029,7 @@ def measurement_delta_t_page() -> None:
         <div class="result-banner">
             <b>Step 2 of 5</b><br>
             Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b><br>
-            Upload Excel files for any available locations uploaded locations. The app reads only
+            Upload Excel files for any available locations M1–M12. The app reads only
             column 3 and calculates ΔT = maximum temperature − minimum temperature.
         </div>
         """,
@@ -1826,7 +2053,7 @@ def measurement_delta_t_page() -> None:
     st.markdown("### Upload available Excel files")
     st.info(
         "Upload one file per available measurement location. The first and second columns are ignored. "
-        "Only the third column is used for the temperature range and profile plots."
+        "Only the third column is used for the temperature range and height-temperature profile plots."
     )
 
     uploaded_files = {}
@@ -1889,9 +2116,13 @@ def measurement_delta_t_page() -> None:
                 st.session_state.confirmed_wells_riley = False
                 st.session_state.pop("ri_result", None)
                 st.session_state.pop("wr_result", None)
+                # Reset plot confirmations when new data are calculated.
+                st.session_state.pop("confirmed_delta_map_plot", None)
+                st.session_state.pop("confirmed_individual_plot_label", None)
+                st.session_state.pop("confirmed_compare_plot_items", None)
                 st.success(
                     f"ΔT values calculated for {len(results)} uploaded location(s). "
-                    "Review the table and plots below, then confirm to continue."
+                    "Review the table, then confirm whichever plots you need."
                 )
 
     delta_t_result = st.session_state.get("measurement_delta_t_result")
@@ -1938,100 +2169,172 @@ def measurement_delta_t_page() -> None:
                 "Some uploaded files have a different count. ΔT and plots are still calculated using all numeric values in the third column."
             )
 
-        st.markdown("### Plots after ΔT")
-        plot_mode = st.radio(
-            "Choose plot option",
-            options=[
-                "ΔT map",
-                "Individual height vs temperature plot",
-                "Compare plots",
-            ],
-            horizontal=True,
-            key="measurement_plot_mode",
+        st.markdown("### Plot windows")
+        st.caption("Plots are hidden until you select the required options and press the relevant Confirm button.")
+
+        tab_map, tab_individual, tab_compare = st.tabs(
+            ["ΔT map", "Individual location plot", "Compare selected locations"]
         )
 
-        if plot_mode == "ΔT map":
-            st.caption("Each uploaded location is marked as M# (ΔT). Locations without uploaded files are shown faintly.")
-            delta_map_fig = create_measurement_delta_t_map_figure(confirmed_pattern, delta_t_result)
-            st.pyplot(delta_map_fig, use_container_width=True)
-            delta_map_png = figure_to_png(delta_map_fig)
-            plt.close(delta_map_fig)
-            st.download_button(
-                label="⬇ Download ΔT map",
-                data=delta_map_png,
-                file_name="atlice_measurement_delta_t_map.png",
-                mime="image/png",
-                key="download_delta_t_map",
-                use_container_width=True,
+        with tab_map:
+            st.markdown(
+                """
+                <div class="plot-control-card">
+                    <b>ΔT map</b><br>
+                    Shows the room layout with each uploaded measurement location labelled as M# (ΔT).
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
+            if st.button(
+                "Confirm and show ΔT map",
+                key="confirm_delta_map_plot_button",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.confirmed_delta_map_plot = True
 
-        elif plot_mode == "Individual height vs temperature plot":
+            if st.session_state.get("confirmed_delta_map_plot"):
+                delta_map_fig = create_measurement_delta_t_map_figure(confirmed_pattern, delta_t_result)
+                st.pyplot(delta_map_fig, use_container_width=True)
+                delta_map_png = figure_to_png(delta_map_fig)
+                plt.close(delta_map_fig)
+                st.download_button(
+                    label="⬇ Download ΔT map",
+                    data=delta_map_png,
+                    file_name="atlice_measurement_delta_t_map.png",
+                    mime="image/png",
+                    key="download_delta_t_map",
+                    use_container_width=True,
+                )
+
+        with tab_individual:
             uploaded_labels = sorted(
                 delta_t_result["results"].keys(),
                 key=lambda label: int(label.replace("M", "")),
             )
             selected_label = st.selectbox(
-                "Select measurement location",
+                "Select one uploaded measurement location",
                 options=uploaded_labels,
                 key="selected_individual_measurement_plot",
             )
-            selected_result = delta_t_result["results"][selected_label]
-            profile_fig = create_temperature_profile_figure(selected_label, selected_result)
-            st.pyplot(profile_fig, use_container_width=True)
-            profile_png = figure_to_png(profile_fig)
-            plt.close(profile_fig)
-            st.download_button(
-                label=f"⬇ Download {selected_label} height-temperature plot",
-                data=profile_png,
-                file_name=f"atlice_{selected_label.lower()}_height_temperature_plot.png",
-                mime="image/png",
-                key=f"download_{selected_label.lower()}_profile_plot",
+
+            if st.button(
+                "Confirm and show individual plot",
+                key="confirm_individual_plot_button",
+                type="primary",
                 use_container_width=True,
+            ):
+                st.session_state.confirmed_individual_plot_label = selected_label
+
+            confirmed_label = st.session_state.get("confirmed_individual_plot_label")
+            if confirmed_label:
+                if confirmed_label not in delta_t_result["results"]:
+                    st.warning("The confirmed location is no longer available. Please select and confirm again.")
+                else:
+                    selected_result = delta_t_result["results"][confirmed_label]
+                    profile_fig = create_temperature_profile_figure(confirmed_label, selected_result)
+                    st.pyplot(profile_fig, use_container_width=True)
+                    profile_png = figure_to_png(profile_fig)
+                    plt.close(profile_fig)
+                    st.download_button(
+                        label=f"⬇ Download {confirmed_label} height-temperature plot",
+                        data=profile_png,
+                        file_name=f"atlice_{confirmed_label.lower()}_height_temperature_plot.png",
+                        mime="image/png",
+                        key=f"download_{confirmed_label.lower()}_profile_plot",
+                        use_container_width=True,
+                    )
+
+        with tab_compare:
+            all_options = [f"M{index}" for index in range(1, 13)] + ["Mavg"]
+            uploaded_labels = sorted(
+                delta_t_result["results"].keys(),
+                key=lambda label: int(label.replace("M", "")),
+            )
+            default_options = uploaded_labels[:2] if len(uploaded_labels) >= 2 else uploaded_labels
+            if uploaded_labels:
+                default_options = default_options + ["Mavg"]
+
+            selected_compare_items = st.multiselect(
+                "Select locations to compare",
+                options=all_options,
+                default=default_options,
+                help="Mavg is the room-average height-temperature profile from all uploaded locations.",
+                key="selected_compare_measurement_plots",
             )
 
-        else:
-            compare_col1, compare_col2 = st.columns(2, gap="large")
-            with compare_col1:
-                st.markdown("#### Room average height vs temperature")
-                average_fig = create_room_average_profile_figure(delta_t_result)
-                st.pyplot(average_fig, use_container_width=True)
-                average_png = figure_to_png(average_fig)
-                plt.close(average_fig)
-                st.download_button(
-                    label="⬇ Download room-average plot",
-                    data=average_png,
-                    file_name="atlice_room_average_height_temperature_plot.png",
-                    mime="image/png",
-                    key="download_room_average_plot",
-                    use_container_width=True,
+            missing_selected = [
+                item for item in selected_compare_items
+                if item != "Mavg" and item not in delta_t_result["results"]
+            ]
+            if missing_selected:
+                st.warning(
+                    "These selected locations do not have uploaded data and will be skipped: "
+                    + ", ".join(missing_selected)
                 )
 
-            with compare_col2:
-                st.markdown("#### Uploaded locations with room average")
-                combined_fig = create_combined_profiles_figure(delta_t_result)
-                st.pyplot(combined_fig, use_container_width=True)
-                combined_png = figure_to_png(combined_fig)
-                plt.close(combined_fig)
-                st.download_button(
-                    label="⬇ Download comparison plot",
-                    data=combined_png,
-                    file_name="atlice_all_locations_with_room_average_plot.png",
-                    mime="image/png",
-                    key="download_combined_profile_plot",
-                    use_container_width=True,
-                )
+            if st.button(
+                "Confirm and show comparison plot",
+                key="confirm_compare_plot_button",
+                type="primary",
+                use_container_width=True,
+            ):
+                valid_items = [
+                    item for item in selected_compare_items
+                    if item == "Mavg" or item in delta_t_result["results"]
+                ]
+                if not valid_items:
+                    st.error("Select at least one uploaded location or Mavg before confirming.")
+                else:
+                    st.session_state.confirmed_compare_plot_items = valid_items
 
-            st.markdown(
-                f"""
-                <div class="result-banner">
-                    <b>Temperature summary from uploaded locations</b><br>
-                    Higher-end T: <b>{room_stats['highest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
-                    Lower-end T: <b>{room_stats['lowest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
-                    Room mean T: <b>{room_stats['room_mean_temperature']:.3f} °C</b>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            confirmed_compare_items = st.session_state.get("confirmed_compare_plot_items")
+            if confirmed_compare_items:
+                compare_col1, compare_col2 = st.columns(2, gap="large")
+
+                with compare_col1:
+                    st.markdown("#### Mavg room-average profile")
+                    average_fig = create_room_average_profile_figure(delta_t_result)
+                    st.pyplot(average_fig, use_container_width=True)
+                    average_png = figure_to_png(average_fig)
+                    plt.close(average_fig)
+                    st.download_button(
+                        label="⬇ Download Mavg plot",
+                        data=average_png,
+                        file_name="atlice_mavg_room_average_height_temperature_plot.png",
+                        mime="image/png",
+                        key="download_room_average_plot",
+                        use_container_width=True,
+                    )
+
+                with compare_col2:
+                    st.markdown("#### Confirmed comparison profile")
+                    combined_fig = create_combined_profiles_figure(delta_t_result, confirmed_compare_items)
+                    st.pyplot(combined_fig, use_container_width=True)
+                    combined_png = figure_to_png(combined_fig)
+                    plt.close(combined_fig)
+                    selected_name = "_".join(item.lower() for item in confirmed_compare_items)
+                    st.download_button(
+                        label="⬇ Download selected comparison plot",
+                        data=combined_png,
+                        file_name=f"atlice_compare_{selected_name}.png",
+                        mime="image/png",
+                        key="download_selected_comparison_profile_plot",
+                        use_container_width=True,
+                    )
+
+                st.markdown(
+                    f"""
+                    <div class="result-banner">
+                        <b>Temperature summary from uploaded locations</b><br>
+                        Higher-end T: <b>{room_stats['highest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
+                        Lower-end T: <b>{room_stats['lowest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
+                        Room mean T: <b>{room_stats['room_mean_temperature']:.3f} °C</b>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
         results_text_lines = [
             "ATLiCE — MEASUREMENT DELTA T RESULTS",
@@ -2087,6 +2390,7 @@ def measurement_delta_t_page() -> None:
                 ):
                     st.session_state.current_page = "ri"
                     st.rerun()
+
 
 
 # =========================================================
