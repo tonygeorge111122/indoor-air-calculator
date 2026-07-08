@@ -425,7 +425,7 @@ def render_sidebar() -> None:
             <div class="small-note" style="color:rgba(255,255,255,0.72);">
                 Complete each guided stage and confirm its result before moving
                 to the next stage. Excel uploads are read only from the third column
-                to calculate ΔT for M1–M12.
+                to calculate ΔT for uploaded locations.
             </div>
             """,
             unsafe_allow_html=True,
@@ -482,7 +482,7 @@ def home_page() -> None:
     )
 
     st.markdown("## Choose a tool")
-    st.caption("Choose an occupancy symmetry pattern first, preview it, upload M1–M12 measurement files, and then continue to the Richardson calculation.")
+    st.caption("Choose an occupancy symmetry pattern first, preview it, upload uploaded locations measurement files, and then continue to the Richardson calculation.")
 
     col1, col2, col3 = st.columns(3, gap="large")
 
@@ -547,7 +547,7 @@ def home_page() -> None:
                 <div class="tool-icon">👥</div>
                 <h3>Occupancy Patterns</h3>
                 <p>
-                    Choose Pattern 1 or Pattern 2 under the Symmetry Pattern
+                    Choose Pattern 1, Pattern 2, or Null Pattern under the Symmetry Pattern
                     group, preview the selected layout, and confirm it before
                     continuing to the measurement ΔT upload stage.
                 </p>
@@ -566,7 +566,7 @@ def home_page() -> None:
     with occupancy_note:
         st.info(
             "**Workflow:** Select a Symmetry Pattern → confirm the displayed pattern "
-            "→ upload M1–M12 Excel files → calculate and confirm ΔT "
+            "→ upload uploaded locations Excel files → calculate and confirm ΔT "
             "→ continue to Richardson inputs."
         )
 
@@ -1115,19 +1115,28 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
     draw_extension_line(ax, [h6_x, opposite_arrow_x], [h6_top, h6_top])
 
 
+
 def create_occupancy_figure(pattern_name: str):
-    """Create a moderately sized occupancy figure for display inside Streamlit."""
+    """Create a moderately sized occupancy figure for display inside Streamlit.
+
+    Pattern 1 and Pattern 2 include six human heat loads. Null Pattern shows
+    the room, split-system supply units and exhaust only, without occupants.
+    """
     if pattern_name == "Pattern 1":
         positions, dimensions = get_pattern_1_positions()
         dimension_function = draw_pattern_1_dimensions
+        show_occupants = True
     elif pattern_name == "Pattern 2":
         positions, dimensions = get_pattern_2_positions()
         dimension_function = draw_pattern_2_dimensions
+        show_occupants = True
+    elif pattern_name == "Null Pattern":
+        positions, dimensions = {}, {}
+        dimension_function = None
+        show_occupants = False
     else:
         raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
 
-    # The figure is moderately enlarged while remaining centred
-    # and leaving enough white space around the layout.
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
 
@@ -1136,21 +1145,18 @@ def create_occupancy_figure(pattern_name: str):
     ax.set_aspect("equal")
     ax.set_xlabel("Room length (m)", fontsize=10)
     ax.set_ylabel("Room width (m)", fontsize=10)
-    ax.set_title(
-        pattern_name,
-        fontsize=14,
-        pad=13,
-        fontweight="bold",
-    )
+    ax.set_title(pattern_name, fontsize=14, pad=13, fontweight="bold")
     ax.tick_params(axis="both", labelsize=9)
 
     draw_ceiling_grid(ax)
     draw_room_boundary(ax)
-    draw_occupants(ax, positions)
+    if show_occupants:
+        draw_occupants(ax, positions)
     draw_ventilation_units(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
-    dimension_function(ax, positions, dimensions)
+    if dimension_function is not None:
+        dimension_function(ax, positions, dimensions)
 
     ax.text(
         ROOM_LENGTH / 2,
@@ -1162,28 +1168,35 @@ def create_occupancy_figure(pattern_name: str):
     )
     ax.grid(False)
 
-    legend_items = [
-        Line2D(
-            [0], [0], marker="o", color="none",
-            markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
-            markersize=9,
-            label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
-        ),
-        Line2D(
-            [0], [0], marker="s", color="none",
-            markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
-            markersize=9, label="S1 and S2: Supply units",
-        ),
-        Line2D(
-            [0], [0], marker="s", color="none",
-            markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
-            markersize=9, label="E1: Exhaust unit",
-        ),
-        Line2D(
-            [0], [0], color=CEILING_GRID_COLOUR,
-            linewidth=2, label="Ceiling grid: 0.60 m × 0.60 m",
-        ),
-    ]
+    legend_items = []
+    if show_occupants:
+        legend_items.append(
+            Line2D(
+                [0], [0], marker="o", color="none",
+                markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
+                markersize=9,
+                label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+            )
+        )
+    legend_items.extend(
+        [
+            Line2D(
+                [0], [0], marker="s", color="none",
+                markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
+                markersize=9, label="S1 and S2: Supply units",
+            ),
+            Line2D(
+                [0], [0], marker="s", color="none",
+                markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
+                markersize=9, label="E1: Exhaust unit",
+            ),
+            Line2D(
+                [0], [0], color=CEILING_GRID_COLOUR,
+                linewidth=2, label="Ceiling grid: 0.60 m × 0.60 m",
+            ),
+        ]
+    )
+
     fig.legend(
         handles=legend_items,
         title="Layout Labels",
@@ -1198,14 +1211,21 @@ def create_occupancy_figure(pattern_name: str):
     return fig, positions, dimensions
 
 
+
 def create_measurement_locations_figure(pattern_name: str):
     """Create a second figure showing the 12 measurement locations."""
     if pattern_name == "Pattern 1":
         positions, dimensions = get_pattern_1_positions()
         dimension_function = draw_pattern_1_dimensions
+        show_occupants = True
     elif pattern_name == "Pattern 2":
         positions, dimensions = get_pattern_2_positions()
         dimension_function = draw_pattern_2_dimensions
+        show_occupants = True
+    elif pattern_name == "Null Pattern":
+        positions, dimensions = {}, {}
+        dimension_function = None
+        show_occupants = False
     else:
         raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
 
@@ -1217,21 +1237,18 @@ def create_measurement_locations_figure(pattern_name: str):
     ax.set_aspect("equal")
     ax.set_xlabel("Room length (m)", fontsize=10)
     ax.set_ylabel("Room width (m)", fontsize=10)
-    ax.set_title(
-        f"{pattern_name} — Measurement Locations",
-        fontsize=14,
-        pad=13,
-        fontweight="bold",
-    )
+    ax.set_title(f"{pattern_name} — Measurement Locations", fontsize=14, pad=13, fontweight="bold")
     ax.tick_params(axis="both", labelsize=9)
 
     draw_ceiling_grid(ax)
     draw_room_boundary(ax)
-    draw_occupants(ax, positions)
+    if show_occupants:
+        draw_occupants(ax, positions)
     draw_ventilation_units(ax)
     draw_room_labels(ax)
     draw_external_room_dimensions(ax)
-    dimension_function(ax, positions, dimensions)
+    if dimension_function is not None:
+        dimension_function(ax, positions, dimensions)
     draw_measurement_locations(ax)
 
     ax.text(
@@ -1244,29 +1261,36 @@ def create_measurement_locations_figure(pattern_name: str):
     )
     ax.grid(False)
 
-    legend_items = [
-        Line2D(
-            [0], [0], marker="o", color="none",
-            markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
-            markersize=9,
-            label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
-        ),
-        Line2D(
-            [0], [0], marker="s", color="none",
-            markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
-            markersize=9, label="S1 and S2: Supply units",
-        ),
-        Line2D(
-            [0], [0], marker="s", color="none",
-            markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
-            markersize=9, label="E1: Exhaust unit",
-        ),
-        Line2D(
-            [0], [0], marker="D", color="none",
-            markerfacecolor=MEASUREMENT_COLOUR, markeredgecolor="white",
-            markersize=8, label="M1–M12: Measurement locations",
-        ),
-    ]
+    legend_items = []
+    if show_occupants:
+        legend_items.append(
+            Line2D(
+                [0], [0], marker="o", color="none",
+                markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
+                markersize=9,
+                label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+            )
+        )
+    legend_items.extend(
+        [
+            Line2D(
+                [0], [0], marker="s", color="none",
+                markerfacecolor=SUPPLY_COLOUR, markeredgecolor="black",
+                markersize=9, label="S1 and S2: Supply units",
+            ),
+            Line2D(
+                [0], [0], marker="s", color="none",
+                markerfacecolor=EXHAUST_COLOUR, markeredgecolor="black",
+                markersize=9, label="E1: Exhaust unit",
+            ),
+            Line2D(
+                [0], [0], marker="D", color="none",
+                markerfacecolor=MEASUREMENT_COLOUR, markeredgecolor="white",
+                markersize=8, label="uploaded locations: Measurement locations",
+            ),
+        ]
+    )
+
     fig.legend(
         handles=legend_items,
         title="Layout Labels",
@@ -1308,6 +1332,7 @@ def reset_occupancy_workflow() -> None:
 
 
 
+
 def occupancy_page() -> None:
     render_page_heading(
         "👥",
@@ -1329,7 +1354,7 @@ def occupancy_page() -> None:
     with selection_centre:
         selected_pattern = st.radio(
             "Choose a pattern",
-            options=["Pattern 1", "Pattern 2"],
+            options=["Pattern 1", "Pattern 2", "Null Pattern"],
             key="occupancy_pattern",
             horizontal=True,
             on_change=reset_occupancy_workflow,
@@ -1354,13 +1379,12 @@ def occupancy_page() -> None:
     preview_pattern = st.session_state.get("occupancy_preview_pattern")
 
     if preview_pattern != selected_pattern:
-        st.info("Select Pattern 1 or Pattern 2, then confirm the selection to display its figure.")
+        st.info("Select Pattern 1, Pattern 2 or Null Pattern, then confirm the selection to display its figure.")
         return
 
     st.markdown("---")
     st.markdown(f"### {preview_pattern}")
 
-    # Display the figure in a wider centred column.
     figure_left, figure_centre, figure_right = st.columns([0.80, 4.10, 0.80])
 
     with figure_centre:
@@ -1369,11 +1393,23 @@ def occupancy_page() -> None:
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
+    if preview_pattern == "Null Pattern":
+        occupant_count = 0
+        heat_per_occupant = 0
+        total_occupant_load = 0
+    else:
+        occupant_count = 6
+        heat_per_occupant = HUMAN_HEAT_LOAD
+        total_occupant_load = occupant_count * heat_per_occupant
+
     metric1, metric2, metric3, metric4 = st.columns(4)
-    metric1.metric("Occupants", "6")
-    metric2.metric("Heat per occupant", "100 W")
-    metric3.metric("Total occupant load", "600 W")
+    metric1.metric("Occupants", f"{occupant_count}")
+    metric2.metric("Heat per occupant", f"{heat_per_occupant} W")
+    metric3.metric("Total occupant load", f"{total_occupant_load} W")
     metric4.metric("Room volume", "63.50 m³")
+
+    if preview_pattern == "Null Pattern":
+        st.info("Null Pattern contains no human heat loads. Only S1, S2 and E1 are shown in the room layout.")
 
     st.markdown("### Measurement locations")
     measure_left, measure_centre, measure_right = st.columns([0.80, 4.10, 0.80])
@@ -1426,7 +1462,6 @@ def occupancy_page() -> None:
             st.rerun()
 
 
-
 # =========================================================
 # MEASUREMENT ΔT UPLOAD PAGE
 # =========================================================
@@ -1437,11 +1472,14 @@ MEASUREMENT_EXPECTED_COUNT = int(round((MEASUREMENT_EXPECTED_HEIGHT_END - MEASUR
 RICHARDSON_TOTAL_HEIGHT = 2.70
 
 
+
 def read_delta_t_from_excel(uploaded_file) -> dict:
     """Read only the third column of an uploaded Excel file and calculate ΔT.
 
     The first and second columns are ignored. Non-numeric values in the third
     column, including a header such as Temperature_C, are automatically skipped.
+    The retained numeric values are assigned heights beginning at 0.2 m and
+    increasing by 0.1 m for each subsequent reading.
     """
     uploaded_file.seek(0)
     dataframe = pd.read_excel(uploaded_file, header=None)
@@ -1449,36 +1487,52 @@ def read_delta_t_from_excel(uploaded_file) -> dict:
     if dataframe.shape[1] < 3:
         raise ValueError("The uploaded Excel file must contain at least three columns.")
 
-    temperature_values = pd.to_numeric(dataframe.iloc[:, 2], errors="coerce").dropna()
+    temperature_values = pd.to_numeric(dataframe.iloc[:, 2], errors="coerce").dropna().reset_index(drop=True)
 
     if temperature_values.empty:
         raise ValueError("No numeric temperature values were found in the third column.")
 
+    heights = [MEASUREMENT_HEIGHT_START + MEASUREMENT_HEIGHT_STEP * index for index in range(len(temperature_values))]
+    profile = [
+        {"height": float(height), "temperature": float(temperature)}
+        for height, temperature in zip(heights, temperature_values)
+    ]
+
     minimum_temperature = float(temperature_values.min())
     maximum_temperature = float(temperature_values.max())
+    mean_temperature = float(temperature_values.mean())
     delta_t = maximum_temperature - minimum_temperature
     number_of_readings = int(temperature_values.shape[0])
-
     assumed_last_height = MEASUREMENT_HEIGHT_START + MEASUREMENT_HEIGHT_STEP * (number_of_readings - 1)
 
     return {
         "file_name": uploaded_file.name,
         "minimum_temperature": minimum_temperature,
         "maximum_temperature": maximum_temperature,
+        "mean_temperature": mean_temperature,
         "delta_t": delta_t,
         "number_of_readings": number_of_readings,
         "assumed_first_height": MEASUREMENT_HEIGHT_START,
         "assumed_last_height": assumed_last_height,
+        "profile": profile,
     }
 
 
+
 def get_measurement_delta_t_dataframe(delta_t_result: dict) -> pd.DataFrame:
-    """Convert confirmed measurement ΔT results into a display table."""
+    """Convert measurement ΔT results into a display table.
+
+    Only uploaded and successfully processed measurement locations are included.
+    """
     measurement_locations = get_measurement_locations()
     rows = []
 
-    for measurement_label in [f"M{index}" for index in range(1, 13)]:
-        result = delta_t_result["results"][measurement_label]
+    result_items = sorted(
+        delta_t_result.get("results", {}).items(),
+        key=lambda item: int(item[0].replace("M", "")),
+    )
+
+    for measurement_label, result in result_items:
         x_value, y_value = measurement_locations[measurement_label]
 
         rows.append(
@@ -1490,6 +1544,7 @@ def get_measurement_delta_t_dataframe(delta_t_result: dict) -> pd.DataFrame:
                 "Readings": result["number_of_readings"],
                 "Min T (°C)": result["minimum_temperature"],
                 "Max T (°C)": result["maximum_temperature"],
+                "Mean T (°C)": result.get("mean_temperature", float("nan")),
                 "ΔT = Max − Min (K or °C)": result["delta_t"],
             }
         )
@@ -1497,11 +1552,236 @@ def get_measurement_delta_t_dataframe(delta_t_result: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def get_measurement_profile_dataframe(delta_t_result: dict) -> pd.DataFrame:
+    """Return a long-form dataframe containing height-temperature profiles."""
+    rows = []
+    for measurement_label, result in sorted(
+        delta_t_result.get("results", {}).items(),
+        key=lambda item: int(item[0].replace("M", "")),
+    ):
+        for point in result.get("profile", []):
+            rows.append(
+                {
+                    "Measurement": measurement_label,
+                    "Height (m)": float(point["height"]),
+                    "Temperature (°C)": float(point["temperature"]),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def get_room_average_profile_dataframe(delta_t_result: dict) -> pd.DataFrame:
+    """Average temperature across uploaded locations at each measured height."""
+    profile_dataframe = get_measurement_profile_dataframe(delta_t_result)
+    if profile_dataframe.empty:
+        return pd.DataFrame(columns=["Height (m)", "Average Temperature (°C)"])
+
+    average_dataframe = (
+        profile_dataframe.groupby("Height (m)", as_index=False)["Temperature (°C)"]
+        .mean()
+        .rename(columns={"Temperature (°C)": "Average Temperature (°C)"})
+        .sort_values("Height (m)")
+    )
+    return average_dataframe
+
+
+def get_room_temperature_statistics(delta_t_result: dict) -> dict:
+    """Return global high, low and mean temperature across all uploaded files."""
+    profile_dataframe = get_measurement_profile_dataframe(delta_t_result)
+    if profile_dataframe.empty:
+        return {"highest_temperature": float("nan"), "lowest_temperature": float("nan"), "room_mean_temperature": float("nan")}
+
+    return {
+        "highest_temperature": float(profile_dataframe["Temperature (°C)"].max()),
+        "lowest_temperature": float(profile_dataframe["Temperature (°C)"].min()),
+        "room_mean_temperature": float(profile_dataframe["Temperature (°C)"].mean()),
+    }
+
+
+def draw_measurement_delta_t_locations(ax, delta_t_result: dict):
+    """Draw measurement markers labelled as M# (ΔT value) for uploaded files."""
+    measurement_locations = get_measurement_locations()
+    results = delta_t_result.get("results", {})
+
+    for label, (x_value, y_value) in measurement_locations.items():
+        has_result = label in results
+        marker_size = 72 if has_result else 46
+        marker_alpha = 0.95 if has_result else 0.35
+        ax.scatter(
+            x_value,
+            y_value,
+            s=marker_size,
+            marker="D",
+            facecolor=MEASUREMENT_COLOUR,
+            edgecolor="white",
+            linewidth=0.9,
+            alpha=marker_alpha,
+            zorder=6,
+        )
+
+        if has_result:
+            delta_text = f"{results[label]['delta_t']:.2f}"
+            text_label = f"{label} ({delta_text})"
+        else:
+            text_label = label
+
+        ax.text(
+            x_value + 0.08,
+            y_value + 0.08,
+            text_label,
+            fontsize=7.5,
+            color=MEASUREMENT_COLOUR,
+            fontweight="normal",
+            zorder=7,
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.76, pad=0.5),
+        )
+
+
+def create_measurement_delta_t_map_figure(pattern_name: str, delta_t_result: dict):
+    """Create room measurement-location map with ΔT shown in brackets."""
+    if pattern_name == "Pattern 1":
+        positions, dimensions = get_pattern_1_positions()
+        dimension_function = draw_pattern_1_dimensions
+        show_occupants = True
+    elif pattern_name == "Pattern 2":
+        positions, dimensions = get_pattern_2_positions()
+        dimension_function = draw_pattern_2_dimensions
+        show_occupants = True
+    elif pattern_name == "Null Pattern":
+        positions, dimensions = {}, {}
+        dimension_function = None
+        show_occupants = False
+    else:
+        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+
+    fig, ax = plt.subplots(figsize=(10.4, 6.5))
+    fig.patch.set_facecolor("white")
+    ax.set_xlim(-0.72, ROOM_LENGTH + 0.52)
+    ax.set_ylim(-0.76, ROOM_WIDTH + 0.53)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Room length (m)", fontsize=10)
+    ax.set_ylabel("Room width (m)", fontsize=10)
+    ax.set_title(f"{pattern_name} — Measurement ΔT Map", fontsize=14, pad=13, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=9)
+
+    draw_ceiling_grid(ax)
+    draw_room_boundary(ax)
+    if show_occupants:
+        draw_occupants(ax, positions)
+    draw_ventilation_units(ax)
+    draw_room_labels(ax)
+    draw_external_room_dimensions(ax)
+    if dimension_function is not None:
+        dimension_function(ax, positions, dimensions)
+    draw_measurement_delta_t_locations(ax, delta_t_result)
+
+    ax.text(
+        ROOM_LENGTH / 2,
+        ROOM_WIDTH + 0.34,
+        "Uploaded locations are labelled as M# (ΔT). Non-uploaded locations are shown faintly.",
+        ha="center",
+        va="bottom",
+        fontsize=8.6,
+    )
+    ax.grid(False)
+    fig.tight_layout(rect=[0.02, 0.05, 0.98, 0.95])
+    return fig
+
+
+def create_temperature_profile_figure(measurement_label: str, result: dict):
+    """Create a height-temperature plot for one measurement location."""
+    profile_dataframe = pd.DataFrame(result.get("profile", []))
+    if profile_dataframe.empty:
+        raise ValueError(f"No profile data found for {measurement_label}.")
+
+    fig, ax = plt.subplots(figsize=(6.8, 6.0))
+    ax.plot(profile_dataframe["temperature"], profile_dataframe["height"], marker="o", linewidth=1.8)
+    ax.set_xlabel("Temperature (°C)")
+    ax.set_ylabel("Height (m)")
+    ax.set_title(f"{measurement_label} height vs temperature")
+    ax.grid(True, alpha=0.28)
+
+    annotation = (
+        f"ΔT = {result['delta_t']:.3f} K\n"
+        f"Min T = {result['minimum_temperature']:.3f} °C\n"
+        f"Max T = {result['maximum_temperature']:.3f} °C\n"
+        f"Mean T = {result.get('mean_temperature', float('nan')):.3f} °C"
+    )
+    ax.text(
+        0.03,
+        0.97,
+        annotation,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        bbox=dict(facecolor="white", edgecolor="#dbe7e4", alpha=0.90, boxstyle="round,pad=0.4"),
+    )
+    fig.tight_layout()
+    return fig
+
+
+def create_room_average_profile_figure(delta_t_result: dict):
+    """Create room-average height-temperature plot."""
+    average_dataframe = get_room_average_profile_dataframe(delta_t_result)
+    if average_dataframe.empty:
+        raise ValueError("No profile data available to build room-average plot.")
+
+    fig, ax = plt.subplots(figsize=(6.8, 6.0))
+    ax.plot(average_dataframe["Average Temperature (°C)"], average_dataframe["Height (m)"], marker="o", linewidth=2.2)
+    ax.set_xlabel("Room average temperature (°C)")
+    ax.set_ylabel("Height (m)")
+    ax.set_title("Room average height vs temperature")
+    ax.grid(True, alpha=0.28)
+    fig.tight_layout()
+    return fig
+
+
+def create_combined_profiles_figure(delta_t_result: dict):
+    """Create one comparison plot with every uploaded location and the room-average profile."""
+    profile_dataframe = get_measurement_profile_dataframe(delta_t_result)
+    average_dataframe = get_room_average_profile_dataframe(delta_t_result)
+
+    if profile_dataframe.empty:
+        raise ValueError("No profile data available to build comparison plot.")
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.2))
+
+    for measurement_label, group in profile_dataframe.groupby("Measurement"):
+        group = group.sort_values("Height (m)")
+        ax.plot(
+            group["Temperature (°C)"],
+            group["Height (m)"],
+            marker="o",
+            linewidth=1.1,
+            alpha=0.65,
+            label=measurement_label,
+        )
+
+    if not average_dataframe.empty:
+        ax.plot(
+            average_dataframe["Average Temperature (°C)"],
+            average_dataframe["Height (m)"],
+            marker="s",
+            linewidth=2.8,
+            color="black",
+            label="Room average",
+        )
+
+    ax.set_xlabel("Temperature (°C)")
+    ax.set_ylabel("Height (m)")
+    ax.set_title("All uploaded locations with room-average profile")
+    ax.grid(True, alpha=0.28)
+    ax.legend(loc="best", fontsize=8, ncol=2)
+    fig.tight_layout()
+    return fig
+
+
+
 def measurement_delta_t_page() -> None:
     render_page_heading(
         "📊",
         "Measurement ΔT Upload",
-        "Upload one Excel file for each measurement location M1–M12 and calculate ΔT from the third column only.",
+        "Upload Excel files for any measurement locations and calculate ΔT from the third column only.",
     )
 
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
@@ -1522,8 +1802,8 @@ def measurement_delta_t_page() -> None:
         <div class="result-banner">
             <b>Step 2 of 5</b><br>
             Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b><br>
-            Upload Excel files for M1–M12. The app reads only column 3 and calculates
-            ΔT = maximum temperature − minimum temperature.
+            Upload Excel files for any available locations uploaded locations. The app reads only
+            column 3 and calculates ΔT = maximum temperature − minimum temperature.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1539,13 +1819,14 @@ def measurement_delta_t_page() -> None:
     st.caption(
         "Height assumption for each uploaded file: first numeric reading in the third column is at 0.2 m, "
         "then 0.3 m, 0.4 m, and so on. Expected final reading is at 2.4 m. "
-        "The Richardson characteristic height is kept as 2.7 m by default."
+        "The Richardson characteristic height is kept as 2.7 m by default. "
+        "You may upload only the locations you have; all 12 files are not mandatory."
     )
 
-    st.markdown("### Upload M1–M12 Excel files")
+    st.markdown("### Upload available Excel files")
     st.info(
-        "Upload one file per measurement location. The first and second columns are ignored. "
-        "Only the third column is used for the temperature range calculation."
+        "Upload one file per available measurement location. The first and second columns are ignored. "
+        "Only the third column is used for the temperature range and profile plots."
     )
 
     uploaded_files = {}
@@ -1570,22 +1851,19 @@ def measurement_delta_t_page() -> None:
         )
 
     if calculate_delta_t:
-        missing_files = [
-            measurement_label
+        uploaded_only = {
+            measurement_label: uploaded_file
             for measurement_label, uploaded_file in uploaded_files.items()
-            if uploaded_file is None
-        ]
+            if uploaded_file is not None
+        }
 
-        if missing_files:
-            st.error(
-                "Please upload all 12 files before calculating ΔT. "
-                f"Missing files: {', '.join(missing_files)}."
-            )
+        if not uploaded_only:
+            st.error("Please upload at least one Excel file before calculating ΔT.")
         else:
             results = {}
             errors = []
 
-            for measurement_label, uploaded_file in uploaded_files.items():
+            for measurement_label, uploaded_file in uploaded_only.items():
                 try:
                     results[measurement_label] = read_delta_t_from_excel(uploaded_file)
                 except Exception as error:
@@ -1611,7 +1889,10 @@ def measurement_delta_t_page() -> None:
                 st.session_state.confirmed_wells_riley = False
                 st.session_state.pop("ri_result", None)
                 st.session_state.pop("wr_result", None)
-                st.success("ΔT values calculated. Review the table below, then confirm to continue.")
+                st.success(
+                    f"ΔT values calculated for {len(results)} uploaded location(s). "
+                    "Review the table and plots below, then confirm to continue."
+                )
 
     delta_t_result = st.session_state.get("measurement_delta_t_result")
 
@@ -1621,26 +1902,135 @@ def measurement_delta_t_page() -> None:
 
         result_dataframe = get_measurement_delta_t_dataframe(delta_t_result)
         display_dataframe = result_dataframe.copy()
-        for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]:
+        for column_name in [
+            "x (m)",
+            "y (m)",
+            "Min T (°C)",
+            "Max T (°C)",
+            "Mean T (°C)",
+            "ΔT = Max − Min (K or °C)",
+        ]:
             display_dataframe[column_name] = display_dataframe[column_name].map(lambda value: f"{value:.4f}")
 
         st.dataframe(display_dataframe, use_container_width=True, hide_index=True)
 
+        processed_count = len(result_dataframe)
         average_delta_t = result_dataframe["ΔT = Max − Min (K or °C)"].mean()
         maximum_delta_t = result_dataframe["ΔT = Max − Min (K or °C)"].max()
         minimum_delta_t = result_dataframe["ΔT = Max − Min (K or °C)"].min()
+        room_stats = get_room_temperature_statistics(delta_t_result)
 
         metric1, metric2, metric3, metric4 = st.columns(4)
-        metric1.metric("Files processed", "12")
+        metric1.metric("Files processed", f"{processed_count}")
         metric2.metric("Average ΔT", f"{average_delta_t:.3f} K")
         metric3.metric("Minimum ΔT", f"{minimum_delta_t:.3f} K")
         metric4.metric("Maximum ΔT", f"{maximum_delta_t:.3f} K")
+
+        stat1, stat2, stat3 = st.columns(3)
+        stat1.metric("Higher-end T", f"{room_stats['highest_temperature']:.3f} °C")
+        stat2.metric("Lower-end T", f"{room_stats['lowest_temperature']:.3f} °C")
+        stat3.metric("Room mean T", f"{room_stats['room_mean_temperature']:.3f} °C")
 
         unexpected_counts = result_dataframe[result_dataframe["Readings"] != MEASUREMENT_EXPECTED_COUNT]
         if not unexpected_counts.empty:
             st.warning(
                 f"Expected {MEASUREMENT_EXPECTED_COUNT} numeric readings per file for 0.2 m to 2.4 m at 0.1 m spacing. "
-                "Some uploaded files have a different count. ΔT is still calculated using all numeric values in the third column."
+                "Some uploaded files have a different count. ΔT and plots are still calculated using all numeric values in the third column."
+            )
+
+        st.markdown("### Plots after ΔT")
+        plot_mode = st.radio(
+            "Choose plot option",
+            options=[
+                "ΔT map",
+                "Individual height vs temperature plot",
+                "Compare plots",
+            ],
+            horizontal=True,
+            key="measurement_plot_mode",
+        )
+
+        if plot_mode == "ΔT map":
+            st.caption("Each uploaded location is marked as M# (ΔT). Locations without uploaded files are shown faintly.")
+            delta_map_fig = create_measurement_delta_t_map_figure(confirmed_pattern, delta_t_result)
+            st.pyplot(delta_map_fig, use_container_width=True)
+            delta_map_png = figure_to_png(delta_map_fig)
+            plt.close(delta_map_fig)
+            st.download_button(
+                label="⬇ Download ΔT map",
+                data=delta_map_png,
+                file_name="atlice_measurement_delta_t_map.png",
+                mime="image/png",
+                key="download_delta_t_map",
+                use_container_width=True,
+            )
+
+        elif plot_mode == "Individual height vs temperature plot":
+            uploaded_labels = sorted(
+                delta_t_result["results"].keys(),
+                key=lambda label: int(label.replace("M", "")),
+            )
+            selected_label = st.selectbox(
+                "Select measurement location",
+                options=uploaded_labels,
+                key="selected_individual_measurement_plot",
+            )
+            selected_result = delta_t_result["results"][selected_label]
+            profile_fig = create_temperature_profile_figure(selected_label, selected_result)
+            st.pyplot(profile_fig, use_container_width=True)
+            profile_png = figure_to_png(profile_fig)
+            plt.close(profile_fig)
+            st.download_button(
+                label=f"⬇ Download {selected_label} height-temperature plot",
+                data=profile_png,
+                file_name=f"atlice_{selected_label.lower()}_height_temperature_plot.png",
+                mime="image/png",
+                key=f"download_{selected_label.lower()}_profile_plot",
+                use_container_width=True,
+            )
+
+        else:
+            compare_col1, compare_col2 = st.columns(2, gap="large")
+            with compare_col1:
+                st.markdown("#### Room average height vs temperature")
+                average_fig = create_room_average_profile_figure(delta_t_result)
+                st.pyplot(average_fig, use_container_width=True)
+                average_png = figure_to_png(average_fig)
+                plt.close(average_fig)
+                st.download_button(
+                    label="⬇ Download room-average plot",
+                    data=average_png,
+                    file_name="atlice_room_average_height_temperature_plot.png",
+                    mime="image/png",
+                    key="download_room_average_plot",
+                    use_container_width=True,
+                )
+
+            with compare_col2:
+                st.markdown("#### Uploaded locations with room average")
+                combined_fig = create_combined_profiles_figure(delta_t_result)
+                st.pyplot(combined_fig, use_container_width=True)
+                combined_png = figure_to_png(combined_fig)
+                plt.close(combined_fig)
+                st.download_button(
+                    label="⬇ Download comparison plot",
+                    data=combined_png,
+                    file_name="atlice_all_locations_with_room_average_plot.png",
+                    mime="image/png",
+                    key="download_combined_profile_plot",
+                    use_container_width=True,
+                )
+
+            st.markdown(
+                f"""
+                <div class="result-banner">
+                    <b>Temperature summary from uploaded locations</b><br>
+                    Higher-end T: <b>{room_stats['highest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
+                    Lower-end T: <b>{room_stats['lowest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
+                    Room mean T: <b>{room_stats['room_mean_temperature']:.3f} °C</b>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
         results_text_lines = [
@@ -1650,15 +2040,19 @@ def measurement_delta_t_page() -> None:
             "Reading rule: third Excel column only; first and second columns ignored.",
             "Height assumption: first numeric reading = 0.2 m; subsequent readings increase by 0.1 m; expected final height = 2.4 m.",
             f"Richardson characteristic height used later: {RICHARDSON_TOTAL_HEIGHT:.2f} m.",
+            f"Processed locations: {processed_count}",
+            f"Higher-end T: {room_stats['highest_temperature']:.6f} °C",
+            f"Lower-end T: {room_stats['lowest_temperature']:.6f} °C",
+            f"Room mean T: {room_stats['room_mean_temperature']:.6f} °C",
             "",
-            "Measurement, x (m), y (m), File, Readings, Min T (°C), Max T (°C), ΔT (K or °C)",
+            "Measurement, x (m), y (m), File, Readings, Min T (°C), Max T (°C), Mean T (°C), ΔT (K or °C)",
         ]
 
         for _, row in result_dataframe.iterrows():
             results_text_lines.append(
                 f"{row['Measurement']}, {row['x (m)']:.2f}, {row['y (m)']:.2f}, {row['File']}, "
                 f"{int(row['Readings'])}, {row['Min T (°C)']:.6f}, {row['Max T (°C)']:.6f}, "
-                f"{row['ΔT = Max − Min (K or °C)']:.6f}"
+                f"{row['Mean T (°C)']:.6f}, {row['ΔT = Max − Min (K or °C)']:.6f}"
             )
 
         results_text = "\n".join(results_text_lines) + "\n"
@@ -1919,11 +2313,12 @@ def get_richardson_dataframe(ri_result: dict) -> pd.DataFrame:
     return pd.DataFrame(ri_result["ri_table"])
 
 
+
 def richardson_page() -> None:
     render_page_heading(
         "🌡️",
         "Richardson Number",
-        "Review the twelve imported ΔT values, edit the common Richardson inputs, calculate, and confirm.",
+        "Review the imported ΔT values, edit the common Richardson inputs, calculate, and confirm.",
     )
 
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
@@ -1941,7 +2336,7 @@ def richardson_page() -> None:
 
     if not delta_t_result or not delta_t_confirmed:
         st.warning(
-            "Measurement ΔT values have not been confirmed. Upload M1–M12 Excel files, "
+            "Measurement ΔT values have not been confirmed. Upload at least one Excel file, "
             "calculate ΔT, and confirm the table before opening Richardson inputs."
         )
         if st.button("Go to Measurement ΔT Upload", key="ri_go_to_measurement", type="primary"):
@@ -1949,25 +2344,26 @@ def richardson_page() -> None:
         return
 
     measurement_dataframe = get_measurement_delta_t_dataframe(delta_t_result)
+    processed_count = len(measurement_dataframe)
 
     st.markdown(
         f"""
         <div class="result-banner">
             <b>Step 3 of 5</b><br>
             Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b><br>
-            Confirmed measurement ΔT values: <b>12 locations</b>. Characteristic height default:
+            Confirmed measurement ΔT values: <b>{processed_count} uploaded location(s)</b>. Characteristic height default:
             <b>{RICHARDSON_TOTAL_HEIGHT:.2f} m</b>.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("### Confirmed ΔT values from M1–M12 Excel files")
+    st.markdown("### Confirmed ΔT values from uploaded Excel files")
     delta_display = measurement_dataframe[
-        ["Measurement", "x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]
+        ["Measurement", "x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "Mean T (°C)", "ΔT = Max − Min (K or °C)"]
     ].copy()
 
-    for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]:
+    for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "Mean T (°C)", "ΔT = Max − Min (K or °C)"]:
         delta_display[column_name] = delta_display[column_name].map(lambda value: f"{value:.4f}")
 
     st.dataframe(delta_display, use_container_width=True, hide_index=True)
@@ -2013,7 +2409,7 @@ def richardson_page() -> None:
             )
 
             calculate = st.form_submit_button(
-                "Calculate Richardson Number for all M1–M12 locations",
+                "Calculate Richardson Number for uploaded locations",
                 type="primary",
                 use_container_width=True,
             )
@@ -2025,7 +2421,7 @@ def richardson_page() -> None:
                 <h3>Equation used for each measurement location</h3>
                 <div class="formula-box"><b>Ri = g α ΔT L / V²</b></div>
                 <p class="small-note">
-                    The ΔT values are taken from the uploaded M1–M12 Excel files.
+                    The ΔT values are taken from the uploaded Excel files.
                     Gravity, thermal expansion coefficient, characteristic height and
                     velocity are editable common inputs.
                 </p>
@@ -2082,6 +2478,7 @@ def richardson_page() -> None:
             "delta_t_average": average_delta_t,
             "delta_t_min": min(delta_values),
             "delta_t_max": max(delta_values),
+            "processed_count": len(ri_rows),
             "max_ri_measurement": maximum_ri_row["Measurement"],
             "min_ri_measurement": minimum_ri_row["Measurement"],
             "classification": summary_classification,
@@ -2091,7 +2488,7 @@ def richardson_page() -> None:
     result = st.session_state.get("ri_result")
     if result:
         st.markdown("---")
-        st.markdown("## Richardson result for M1–M12")
+        st.markdown("## Richardson result for uploaded locations")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Average Ri", f"{result['ri_average']:.4f}")
         m2.metric("Minimum Ri", f"{result['ri_min']:.4f}", result["min_ri_measurement"])
@@ -2139,6 +2536,7 @@ def richardson_page() -> None:
             f"Air velocity: {result['air_velocity']:.4f} m/s",
             "",
             "SUMMARY",
+            f"Processed measurement locations: {result.get('processed_count', len(result['ri_table']))}",
             f"Average ΔT: {result['delta_t_average']:.6f} K or °C",
             f"Average Richardson number: {result['ri_average']:.6f}",
             f"Minimum Richardson number: {result['ri_min']:.6f} at {result['min_ri_measurement']}",
@@ -2203,7 +2601,7 @@ def wells_riley_page() -> None:
         <div class="result-banner">
             <b>Step 4 of 5</b><br>
             Pattern: <b>{confirmed_pattern}</b> &nbsp; | &nbsp;
-            Confirmed Richardson results: <b>12 measurement locations</b> &nbsp; | &nbsp;
+            Confirmed Richardson results: <b>{ri_result.get('processed_count', len(ri_result['ri_table']))} measurement location(s)</b> &nbsp; | &nbsp;
             Average Ri: <b>{ri_result['ri_average']:.4f}</b>
         </div>
         """,
@@ -2429,6 +2827,7 @@ Local infection probability: {result['p_local'] * 100:.4f}%
 # =========================================================
 # COMPLETE REPORT
 # =========================================================
+
 def get_pattern_configuration(pattern_name: str) -> dict:
     """Return the selected arrangement and its clear-distance summary."""
     if pattern_name == "Pattern 1":
@@ -2443,32 +2842,59 @@ def get_pattern_configuration(pattern_name: str) -> dict:
             "door_clearance": "0.95 m at the Main Door and opposite wall",
         }
 
+    if pattern_name == "Pattern 2":
+        return {
+            "group": "Symmetry Pattern",
+            "arrangement": "Two rows of three occupants",
+            "spacing_label": "Clear spacing within each row",
+            "spacing_value": "0.70 m",
+            "separation_label": "Clear distance between rows",
+            "separation_value": "1.80 m",
+            "side_clearance": "1.65 m at each side wall",
+            "door_clearance": "0.90 m at the Main Door and opposite wall",
+        }
+
     return {
-        "group": "Symmetry Pattern",
-        "arrangement": "Two rows of three occupants",
-        "spacing_label": "Clear spacing within each row",
-        "spacing_value": "0.70 m",
-        "separation_label": "Clear distance between rows",
-        "separation_value": "1.80 m",
-        "side_clearance": "1.65 m at each side wall",
-        "door_clearance": "0.90 m at the Main Door and opposite wall",
+        "group": "Null Pattern",
+        "arrangement": "No human loads; supply and exhaust units only",
+        "spacing_label": "Occupant spacing",
+        "spacing_value": "Not applicable",
+        "separation_label": "Occupant separation",
+        "separation_value": "Not applicable",
+        "side_clearance": "Not applicable because no occupants are present",
+        "door_clearance": "Not applicable because no occupants are present",
     }
 
 
-def get_load_summary() -> dict:
-    """Calculate the six-person sensible-load airflow used in the study summary."""
-    occupants = 6
-    heat_per_occupant = HUMAN_HEAT_LOAD
+
+def get_load_summary(pattern_name=None) -> dict:
+    """Calculate the sensible-load airflow used in the study summary.
+
+    Null Pattern contains no human heat loads, so the automatic occupant-load
+    airflow summary is zero.
+    """
+    if pattern_name == "Null Pattern":
+        occupants = 0
+        heat_per_occupant = 0
+    else:
+        occupants = 6
+        heat_per_occupant = HUMAN_HEAT_LOAD
+
     total_heat = occupants * heat_per_occupant
     supply_temperature = 12.0
     target_temperature = 22.0
     rho_cp = 1200.0
     delta_t = target_temperature - supply_temperature
     room_volume = ROOM_LENGTH * ROOM_WIDTH * ROOM_HEIGHT
-    airflow_m3s = total_heat / (rho_cp * delta_t)
+
+    if total_heat > 0 and delta_t > 0 and rho_cp > 0:
+        airflow_m3s = total_heat / (rho_cp * delta_t)
+    else:
+        airflow_m3s = 0.0
+
     airflow_ls = airflow_m3s * 1000
     airflow_m3h = airflow_m3s * 3600
-    ach = airflow_m3h / room_volume
+    ach = airflow_m3h / room_volume if room_volume > 0 else 0.0
 
     return {
         "occupants": occupants,
@@ -2549,7 +2975,7 @@ Calculated airflow: {load['airflow_ls']:.2f} L/s
 Calculated airflow: {load['airflow_m3h']:.2f} m³/h
 Calculated total supply ACH: {load['ach']:.2f} h⁻¹
 
-4. RICHARDSON NUMBER FOR M1-M12
+4. RICHARDSON NUMBER FOR UPLOADED MEASUREMENT LOCATIONS
 Gravity: {ri['gravity']:.4f} m/s²
 Thermal expansion coefficient: {ri['alpha']:.6f} 1/K
 Characteristic height / length: {ri['length_scale']:.4f} m
@@ -2703,7 +3129,7 @@ def build_complete_report_html(
         <tr><th>Calculated airflow</th><td>{load['airflow_m3h']:.2f} m³/h</td></tr>
     </table>
 
-    <h2>4. Richardson number for M1-M12</h2>
+    <h2>4. Richardson number for uploaded measurement locations</h2>
     <div class="metrics">
         <div class="metric"><b>Average Ri</b><span>{ri['ri_average']:.4f}</span></div>
         <div class="metric"><b>Minimum Ri</b><span>{ri['ri_min']:.4f}</span></div>
@@ -2801,7 +3227,7 @@ def complete_report_page() -> None:
         return
 
     configuration = get_pattern_configuration(pattern_name)
-    load = get_load_summary()
+    load = get_load_summary(pattern_name)
     measurement_locations = get_measurement_locations()
     fig, _, _ = create_occupancy_figure(pattern_name)
     figure_png = figure_to_png(fig)
@@ -2855,9 +3281,9 @@ def complete_report_page() -> None:
     st.markdown("### Measurement ΔT results")
     measurement_dataframe = get_measurement_delta_t_dataframe(measurement_delta_t)
     measurement_display = measurement_dataframe[
-        ["Measurement", "x (m)", "y (m)", "File", "Readings", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]
+        ["Measurement", "x (m)", "y (m)", "File", "Readings", "Min T (°C)", "Max T (°C)", "Mean T (°C)", "ΔT = Max − Min (K or °C)"]
     ].copy()
-    for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "ΔT = Max − Min (K or °C)"]:
+    for column_name in ["x (m)", "y (m)", "Min T (°C)", "Max T (°C)", "Mean T (°C)", "ΔT = Max − Min (K or °C)"]:
         measurement_display[column_name] = measurement_display[column_name].map(lambda value: f"{value:.4f}")
     st.dataframe(measurement_display, use_container_width=True, hide_index=True)
 
@@ -2934,7 +3360,7 @@ def complete_report_page() -> None:
 
     st.caption(
         "The HTML report includes the selected pattern figure, measurement-locations figure, "
-        "M1–M12 ΔT table, Richardson table and Wells–Riley result."
+        "measurement ΔT table, Richardson table and Wells–Riley result."
     )
 
     restart_left, restart_centre, restart_right = st.columns([1, 2, 1])
