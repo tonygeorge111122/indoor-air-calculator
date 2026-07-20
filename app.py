@@ -679,6 +679,399 @@ def get_pattern_2_positions():
     return positions, dimensions
 
 
+# =========================================================
+# PATTERN ANALYSER ENGINE
+# =========================================================
+PATTERN_ANALYSER_MAX_HEAT_LOADS = 12
+DEFAULT_ANALYSER_WALL_CLEARANCE = 0.65
+DEFAULT_ANALYSER_CLEAR_SPACING = 0.70
+
+
+def evenly_spaced_values(start_value: float, end_value: float, count: int) -> list[float]:
+    """Return evenly spaced coordinate values between two bounds."""
+    if count <= 0:
+        return []
+    if count == 1:
+        return [(start_value + end_value) / 2]
+    step = (end_value - start_value) / (count - 1)
+    return [start_value + step * index for index in range(count)]
+
+
+def make_labelled_positions(points: list[tuple[float, float]]) -> dict:
+    """Convert point coordinates into H1, H2, ... labels."""
+    return {
+        f"H{index + 1}": (round(float(x_value), 3), round(float(y_value), 3))
+        for index, (x_value, y_value) in enumerate(points)
+    }
+
+
+def unique_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Remove repeated points while preserving the original order."""
+    seen = set()
+    cleaned = []
+    for x_value, y_value in points:
+        key = (round(x_value, 3), round(y_value, 3))
+        if key not in seen:
+            seen.add(key)
+            cleaned.append((x_value, y_value))
+    return cleaned
+
+
+def validate_pattern_points(points: list[tuple[float, float]], clear_spacing: float, wall_clearance: float) -> tuple[bool, str]:
+    """Check whether generated heat-load positions are inside the room and not overlapping."""
+    if not points:
+        return True, "No heat loads."
+
+    centre_min_distance = HUMAN_DIAMETER + clear_spacing
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+
+    for label_index, (x_value, y_value) in enumerate(points, start=1):
+        if x_value < x_min or x_value > x_max or y_value < y_min or y_value > y_max:
+            return False, f"H{label_index} is outside the allowed room boundary."
+
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            distance = math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1])
+            if distance < centre_min_distance - 1e-9:
+                return False, (
+                    f"H{i + 1} and H{j + 1} are closer than the requested clear spacing."
+                )
+
+    return True, "Valid pattern."
+
+
+def build_balanced_grid_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate a compact room-balanced grid pattern."""
+    if count <= 0:
+        return []
+
+    usable_length = ROOM_LENGTH - 2 * (wall_clearance + HUMAN_RADIUS)
+    usable_width = ROOM_WIDTH - 2 * (wall_clearance + HUMAN_RADIUS)
+    aspect_ratio = usable_length / usable_width if usable_width > 0 else 1.0
+
+    columns = max(1, math.ceil(math.sqrt(count * aspect_ratio)))
+    rows = math.ceil(count / columns)
+
+    x_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_LENGTH - wall_clearance - HUMAN_RADIUS,
+        columns,
+    )
+    y_values = evenly_spaced_values(
+        ROOM_WIDTH - wall_clearance - HUMAN_RADIUS,
+        wall_clearance + HUMAN_RADIUS,
+        rows,
+    )
+
+    points = []
+    for row_index, y_value in enumerate(y_values):
+        row_x_values = x_values if row_index % 2 == 0 else list(reversed(x_values))
+        for x_value in row_x_values:
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_row_distribution_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate occupants mainly distributed across horizontal rows."""
+    if count <= 0:
+        return []
+    rows = max(1, min(3, math.ceil(count / 4)))
+    columns = math.ceil(count / rows)
+    x_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_LENGTH - wall_clearance - HUMAN_RADIUS,
+        columns,
+    )
+    y_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_WIDTH - wall_clearance - HUMAN_RADIUS,
+        rows,
+    )
+    points = []
+    for row_index, y_value in enumerate(y_values):
+        row_x_values = x_values if row_index % 2 == 0 else list(reversed(x_values))
+        for x_value in row_x_values:
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_column_distribution_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate occupants mainly distributed along vertical columns."""
+    if count <= 0:
+        return []
+    columns = max(1, min(4, math.ceil(count / 3)))
+    rows = math.ceil(count / columns)
+    x_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_LENGTH - wall_clearance - HUMAN_RADIUS,
+        columns,
+    )
+    y_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_WIDTH - wall_clearance - HUMAN_RADIUS,
+        rows,
+    )
+    points = []
+    for column_index, x_value in enumerate(x_values):
+        column_y_values = y_values if column_index % 2 == 0 else list(reversed(y_values))
+        for y_value in column_y_values:
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_staggered_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate a staggered pattern to avoid strict row alignment."""
+    if count <= 0:
+        return []
+    rows = max(1, min(3, math.ceil(math.sqrt(count))))
+    columns = math.ceil(count / rows)
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+    x_values = evenly_spaced_values(x_min, x_max, columns)
+    y_values = evenly_spaced_values(y_max, y_min, rows)
+    x_step = (x_values[1] - x_values[0]) if len(x_values) > 1 else 0.0
+
+    points = []
+    for row_index, y_value in enumerate(y_values):
+        for x_value in x_values:
+            shifted_x = x_value + (0.35 * x_step if row_index % 2 == 1 else 0.0)
+            shifted_x = min(max(shifted_x, x_min), x_max)
+            points.append((shifted_x, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_central_cluster_points(count: int, wall_clearance: float, clear_spacing: float) -> list[tuple[float, float]]:
+    """Generate a central clustered pattern using a compact grid around room centre."""
+    if count <= 0:
+        return []
+    spacing = max(HUMAN_DIAMETER + clear_spacing, 0.55)
+    columns = max(1, math.ceil(math.sqrt(count)))
+    rows = math.ceil(count / columns)
+    centre_x = ROOM_LENGTH / 2
+    centre_y = ROOM_WIDTH / 2
+    x_start = centre_x - spacing * (columns - 1) / 2
+    y_start = centre_y + spacing * (rows - 1) / 2
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+
+    points = []
+    for row_index in range(rows):
+        for col_index in range(columns):
+            x_value = min(max(x_start + col_index * spacing, x_min), x_max)
+            y_value = min(max(y_start - row_index * spacing, y_min), y_max)
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return unique_points(points)
+    return unique_points(points[:count])
+
+
+def build_perimeter_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate a pattern distributed around the measurement zone perimeter."""
+    if count <= 0:
+        return []
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+
+    edge_points = []
+    for x_value in evenly_spaced_values(x_min, x_max, max(2, min(5, count))):
+        edge_points.append((x_value, y_max))
+    for y_value in evenly_spaced_values(y_max, y_min, max(2, min(4, count)))[1:]:
+        edge_points.append((x_max, y_value))
+    for x_value in list(reversed(evenly_spaced_values(x_min, x_max, max(2, min(5, count)))))[1:]:
+        edge_points.append((x_value, y_min))
+    for y_value in list(reversed(evenly_spaced_values(y_min, y_max, max(2, min(4, count)))))[1:-1]:
+        edge_points.append((x_min, y_value))
+
+    edge_points = unique_points(edge_points)
+    if len(edge_points) <= count:
+        return edge_points[:count]
+
+    selected_indices = [round(index * (len(edge_points) - 1) / (count - 1)) for index in range(count)] if count > 1 else [0]
+    return [edge_points[index] for index in selected_indices]
+
+
+def generate_pattern_analyser_candidates(
+    heat_load_count: int,
+    heat_per_person: float,
+    clear_spacing: float,
+    wall_clearance: float = DEFAULT_ANALYSER_WALL_CLEARANCE,
+) -> dict:
+    """Generate deterministic candidate occupancy patterns for a selected heat-load number."""
+    heat_load_count = int(heat_load_count)
+    heat_per_person = float(heat_per_person)
+    clear_spacing = float(clear_spacing)
+    wall_clearance = float(wall_clearance)
+
+    if heat_load_count < 0:
+        raise ValueError("The number of heat loads cannot be negative.")
+    if heat_load_count > PATTERN_ANALYSER_MAX_HEAT_LOADS:
+        raise ValueError(f"The Pattern Analyser supports up to {PATTERN_ANALYSER_MAX_HEAT_LOADS} heat loads.")
+
+    if heat_load_count == 0:
+        pattern_name = "PA-0 — No Heat-Load Case"
+        return {
+            pattern_name: {
+                "positions": {},
+                "occupant_count": 0,
+                "heat_per_person": 0.0,
+                "total_heat_load": 0.0,
+                "clear_spacing": clear_spacing,
+                "wall_clearance": wall_clearance,
+                "arrangement": "No human heat loads; supply and exhaust units only",
+                "group": "Pattern Analyser",
+                "spacing_label": "Occupant spacing",
+                "spacing_value": "Not applicable",
+                "separation_label": "Generated arrangement",
+                "separation_value": "No heat loads",
+                "side_clearance": "Not applicable because no occupants are present",
+                "door_clearance": "Not applicable because no occupants are present",
+                "validity_note": "No heat loads.",
+            }
+        }
+
+    candidate_builders = [
+        ("Balanced Grid", build_balanced_grid_points, "Room-balanced grid distribution"),
+        ("Row Distribution", build_row_distribution_points, "Row-wise distribution across the room length"),
+        ("Column Distribution", build_column_distribution_points, "Column-wise distribution across the room width"),
+        ("Staggered Distribution", build_staggered_points, "Staggered layout to reduce strict alignment"),
+        ("Central Cluster", build_central_cluster_points, "Clustered arrangement near the room centre"),
+        ("Perimeter Distribution", build_perimeter_points, "Distributed arrangement around the occupied-zone perimeter"),
+    ]
+
+    candidates = {}
+    candidate_index = 1
+    for builder_name, builder_function, arrangement in candidate_builders:
+        if builder_function is build_central_cluster_points:
+            points = builder_function(heat_load_count, wall_clearance, clear_spacing)
+        else:
+            points = builder_function(heat_load_count, wall_clearance)
+
+        points = unique_points(points)
+        if len(points) != heat_load_count:
+            continue
+
+        is_valid, validity_note = validate_pattern_points(points, clear_spacing, wall_clearance)
+        if not is_valid:
+            # Keep the pattern but clearly identify that clear spacing may need adjustment.
+            validity_note = f"Spacing check warning: {validity_note}"
+
+        pattern_name = f"PA-{heat_load_count}.{candidate_index} — {builder_name}"
+        candidates[pattern_name] = {
+            "positions": make_labelled_positions(points),
+            "occupant_count": heat_load_count,
+            "heat_per_person": heat_per_person,
+            "total_heat_load": heat_load_count * heat_per_person,
+            "clear_spacing": clear_spacing,
+            "wall_clearance": wall_clearance,
+            "arrangement": arrangement,
+            "group": "Pattern Analyser",
+            "spacing_label": "Minimum requested clear spacing",
+            "spacing_value": f"{clear_spacing:.2f} m",
+            "separation_label": "Generated layout type",
+            "separation_value": builder_name,
+            "side_clearance": f"Minimum wall clearance used by analyser: {wall_clearance:.2f} m",
+            "door_clearance": f"Minimum wall clearance used by analyser: {wall_clearance:.2f} m",
+            "validity_note": validity_note,
+        }
+        candidate_index += 1
+
+    if not candidates:
+        raise ValueError(
+            "No valid candidate patterns could be generated. Reduce the heat-load number or minimum clear spacing."
+        )
+
+    return candidates
+
+
+def get_generated_pattern_metadata(pattern_name: str) -> dict | None:
+    """Return metadata for a Pattern Analyser layout, if available in session state."""
+    candidates = st.session_state.get("pattern_analyser_candidates", {})
+    if pattern_name in candidates:
+        return candidates[pattern_name]
+
+    confirmed_metadata = st.session_state.get("confirmed_pattern_analyser_metadata")
+    if confirmed_metadata and confirmed_metadata.get("pattern_name") == pattern_name:
+        return confirmed_metadata
+
+    return None
+
+
+def get_pattern_layout(pattern_name: str) -> tuple[dict, dict, object, bool, dict]:
+    """Return positions, dimensions and metadata for both fixed and generated patterns."""
+    if pattern_name == "Pattern 1":
+        positions, dimensions = get_pattern_1_positions()
+        metadata = {
+            "group": "Symmetry Pattern",
+            "arrangement": "Two columns of three occupants",
+            "occupant_count": 6,
+            "heat_per_person": HUMAN_HEAT_LOAD,
+            "total_heat_load": 6 * HUMAN_HEAT_LOAD,
+            "validity_note": "Fixed reference pattern.",
+        }
+        return positions, dimensions, draw_pattern_1_dimensions, True, metadata
+
+    if pattern_name == "Pattern 2":
+        positions, dimensions = get_pattern_2_positions()
+        metadata = {
+            "group": "Symmetry Pattern",
+            "arrangement": "Two rows of three occupants",
+            "occupant_count": 6,
+            "heat_per_person": HUMAN_HEAT_LOAD,
+            "total_heat_load": 6 * HUMAN_HEAT_LOAD,
+            "validity_note": "Fixed reference pattern.",
+        }
+        return positions, dimensions, draw_pattern_2_dimensions, True, metadata
+
+    if pattern_name == "Null Pattern":
+        metadata = {
+            "group": "Null Pattern",
+            "arrangement": "No human loads; supply and exhaust units only",
+            "occupant_count": 0,
+            "heat_per_person": 0,
+            "total_heat_load": 0,
+            "validity_note": "No human heat loads.",
+        }
+        return {}, {}, None, False, metadata
+
+    generated_metadata = get_generated_pattern_metadata(pattern_name)
+    if generated_metadata is not None:
+        positions = generated_metadata.get("positions", {})
+        show_occupants = bool(positions)
+        return positions, {}, None, show_occupants, generated_metadata
+
+    raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+
+
+def get_pattern_heat_summary(pattern_name: str) -> dict:
+    """Return occupant count and heat-load summary for any selected pattern."""
+    _, _, _, _, metadata = get_pattern_layout(pattern_name)
+    occupant_count = int(metadata.get("occupant_count", 0))
+    heat_per_person = float(metadata.get("heat_per_person", HUMAN_HEAT_LOAD if occupant_count else 0))
+    total_heat_load = float(metadata.get("total_heat_load", occupant_count * heat_per_person))
+    return {
+        "occupant_count": occupant_count,
+        "heat_per_person": heat_per_person,
+        "total_heat_load": total_heat_load,
+    }
+
+
 def draw_double_arrow(
     ax,
     start,
@@ -1120,23 +1513,10 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
 def create_occupancy_figure(pattern_name: str):
     """Create a moderately sized occupancy figure for display inside Streamlit.
 
-    Pattern 1 and Pattern 2 include six human heat loads. Null Pattern shows
-    the room, split-system supply units and exhaust only, without occupants.
+    Fixed patterns use the original Pattern 1 / Pattern 2 dimensions. Pattern
+    Analyser layouts use generated human heat-load positions selected by the user.
     """
-    if pattern_name == "Pattern 1":
-        positions, dimensions = get_pattern_1_positions()
-        dimension_function = draw_pattern_1_dimensions
-        show_occupants = True
-    elif pattern_name == "Pattern 2":
-        positions, dimensions = get_pattern_2_positions()
-        dimension_function = draw_pattern_2_dimensions
-        show_occupants = True
-    elif pattern_name == "Null Pattern":
-        positions, dimensions = {}, {}
-        dimension_function = None
-        show_occupants = False
-    else:
-        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+    positions, dimensions, dimension_function, show_occupants, metadata = get_pattern_layout(pattern_name)
 
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
@@ -1159,10 +1539,14 @@ def create_occupancy_figure(pattern_name: str):
     if dimension_function is not None:
         dimension_function(ax, positions, dimensions)
 
+    upper_note = f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m"
+    if metadata.get("group") == "Pattern Analyser":
+        upper_note = f"Pattern Analyser layout · {metadata.get('arrangement', '')}"
+
     ax.text(
         ROOM_LENGTH / 2,
         ROOM_WIDTH + 0.34,
-        f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m",
+        upper_note,
         ha="center",
         va="bottom",
         fontsize=9,
@@ -1171,12 +1555,14 @@ def create_occupancy_figure(pattern_name: str):
 
     legend_items = []
     if show_occupants:
+        occupant_count = int(metadata.get("occupant_count", len(positions)))
+        heat_per_person = float(metadata.get("heat_per_person", HUMAN_HEAT_LOAD))
         legend_items.append(
             Line2D(
                 [0], [0], marker="o", color="none",
                 markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
                 markersize=9,
-                label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+                label=f"H1–H{occupant_count}: Human heat loads ({heat_per_person:.0f} W each)",
             )
         )
     legend_items.extend(
@@ -1212,23 +1598,9 @@ def create_occupancy_figure(pattern_name: str):
     return fig, positions, dimensions
 
 
-
 def create_measurement_locations_figure(pattern_name: str):
     """Create a second figure showing the 12 measurement locations."""
-    if pattern_name == "Pattern 1":
-        positions, dimensions = get_pattern_1_positions()
-        dimension_function = draw_pattern_1_dimensions
-        show_occupants = True
-    elif pattern_name == "Pattern 2":
-        positions, dimensions = get_pattern_2_positions()
-        dimension_function = draw_pattern_2_dimensions
-        show_occupants = True
-    elif pattern_name == "Null Pattern":
-        positions, dimensions = {}, {}
-        dimension_function = None
-        show_occupants = False
-    else:
-        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+    positions, dimensions, dimension_function, show_occupants, metadata = get_pattern_layout(pattern_name)
 
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
@@ -1264,12 +1636,14 @@ def create_measurement_locations_figure(pattern_name: str):
 
     legend_items = []
     if show_occupants:
+        occupant_count = int(metadata.get("occupant_count", len(positions)))
+        heat_per_person = float(metadata.get("heat_per_person", HUMAN_HEAT_LOAD))
         legend_items.append(
             Line2D(
                 [0], [0], marker="o", color="none",
                 markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
                 markersize=9,
-                label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+                label=f"H1–H{occupant_count}: Human heat loads ({heat_per_person:.0f} W each)",
             )
         )
     legend_items.extend(
@@ -1321,6 +1695,7 @@ def reset_occupancy_workflow() -> None:
     """Clear the preview and every downstream result after a pattern change."""
     st.session_state.occupancy_preview_pattern = None
     st.session_state.confirmed_occupancy_pattern = None
+    st.session_state.confirmed_pattern_analyser_metadata = None
     st.session_state.confirmed_measurement_delta_t = False
     st.session_state.confirmed_richardson = False
     st.session_state.confirmed_wells_riley = False
@@ -1330,60 +1705,215 @@ def reset_occupancy_workflow() -> None:
     st.session_state.pop("confirmed_delta_map_plot", None)
     st.session_state.pop("confirmed_individual_plot_label", None)
     st.session_state.pop("confirmed_compare_plot_items", None)
+    st.session_state.pop("confirmed_all_vs_average_plot", None)
 
 
-
-
-
+def clear_generated_candidates() -> None:
+    """Clear Pattern Analyser candidates when generator inputs are changed."""
+    reset_occupancy_workflow()
+    st.session_state.pop("pattern_analyser_candidates", None)
+    st.session_state.pop("selected_pattern_analyser_candidate", None)
 
 
 def occupancy_page() -> None:
     render_page_heading(
         "👥",
         "Occupancy Patterns",
-        "Choose a symmetry pattern, preview its layout, and confirm it before continuing.",
+        "Choose a fixed pattern or use the Pattern Analyser to generate layouts for a selected heat-load number.",
     )
 
     st.session_state.setdefault("occupancy_pattern", "Pattern 1")
+    st.session_state.setdefault("pattern_source", "Reference patterns")
     st.session_state.setdefault("occupancy_preview_pattern", None)
     st.session_state.setdefault("confirmed_occupancy_pattern", None)
+    st.session_state.setdefault("confirmed_pattern_analyser_metadata", None)
     st.session_state.setdefault("confirmed_measurement_delta_t", False)
     st.session_state.setdefault("confirmed_richardson", False)
     st.session_state.setdefault("confirmed_wells_riley", False)
 
-    st.markdown("### Symmetry Pattern")
+    st.markdown("### Occupancy pattern selection")
 
-    selection_left, selection_centre, selection_right = st.columns([1, 2.2, 1])
-
-    with selection_centre:
-        selected_pattern = st.radio(
-            "Choose a pattern",
-            options=["Pattern 1", "Pattern 2", "Null Pattern"],
-            key="occupancy_pattern",
+    source_left, source_centre, source_right = st.columns([0.85, 2.7, 0.85])
+    with source_centre:
+        pattern_source = st.radio(
+            "Choose pattern source",
+            options=["Reference patterns", "Pattern Analyser"],
+            key="pattern_source",
             horizontal=True,
             on_change=reset_occupancy_workflow,
+            help="Reference patterns keep the original Pattern 1, Pattern 2 and Null Pattern. Pattern Analyser creates candidate layouts from the selected heat-load number.",
         )
 
-        if st.button(
-            "Confirm selection and show figure",
-            key="preview_selected_pattern",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state.occupancy_preview_pattern = selected_pattern
-            st.session_state.confirmed_occupancy_pattern = None
-            st.session_state.confirmed_measurement_delta_t = False
-            st.session_state.confirmed_richardson = False
-            st.session_state.confirmed_wells_riley = False
-            st.session_state.pop("measurement_delta_t_result", None)
-            st.session_state.pop("ri_result", None)
-            st.session_state.pop("wr_result", None)
-            st.rerun()
+    selected_pattern = None
+
+    if pattern_source == "Reference patterns":
+        st.markdown("### Reference patterns")
+        selection_left, selection_centre, selection_right = st.columns([1, 2.2, 1])
+
+        with selection_centre:
+            selected_pattern = st.radio(
+                "Choose a pattern",
+                options=["Pattern 1", "Pattern 2", "Null Pattern"],
+                key="occupancy_pattern",
+                horizontal=True,
+                on_change=reset_occupancy_workflow,
+            )
+
+            if st.button(
+                "Confirm selection and show figure",
+                key="preview_selected_reference_pattern",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.occupancy_preview_pattern = selected_pattern
+                st.session_state.confirmed_occupancy_pattern = None
+                st.session_state.confirmed_pattern_analyser_metadata = None
+                st.session_state.confirmed_measurement_delta_t = False
+                st.session_state.confirmed_richardson = False
+                st.session_state.confirmed_wells_riley = False
+                st.session_state.pop("measurement_delta_t_result", None)
+                st.session_state.pop("ri_result", None)
+                st.session_state.pop("wr_result", None)
+                st.rerun()
+
+    else:
+        st.markdown("### Pattern Analyser")
+        st.markdown(
+            """
+            <div class="section-card">
+                <h3>Generate candidate heat-load layouts</h3>
+                <p>
+                    Enter the number of human heat loads and the Pattern Analyser will create
+                    repeatable candidate layouts with scientific pattern names. This is not an
+                    online AI call; it is a deterministic layout analyser for controlled experiments.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        input_col1, input_col2, input_col3, input_col4 = st.columns(4)
+        with input_col1:
+            heat_load_count = st.number_input(
+                "Number of human heat loads",
+                min_value=0,
+                max_value=PATTERN_ANALYSER_MAX_HEAT_LOADS,
+                value=6,
+                step=1,
+                key="pattern_analyser_heat_load_count",
+                on_change=clear_generated_candidates,
+            )
+        with input_col2:
+            heat_per_person = st.number_input(
+                "Heat per load (W)",
+                min_value=0.0,
+                value=float(HUMAN_HEAT_LOAD),
+                step=5.0,
+                key="pattern_analyser_heat_per_person",
+                on_change=clear_generated_candidates,
+            )
+        with input_col3:
+            clear_spacing = st.number_input(
+                "Minimum clear spacing (m)",
+                min_value=0.10,
+                max_value=1.50,
+                value=DEFAULT_ANALYSER_CLEAR_SPACING,
+                step=0.05,
+                key="pattern_analyser_clear_spacing",
+                on_change=clear_generated_candidates,
+            )
+        with input_col4:
+            wall_clearance = st.number_input(
+                "Minimum wall clearance (m)",
+                min_value=0.20,
+                max_value=1.50,
+                value=DEFAULT_ANALYSER_WALL_CLEARANCE,
+                step=0.05,
+                key="pattern_analyser_wall_clearance",
+                on_change=clear_generated_candidates,
+            )
+
+        generate_left, generate_centre, generate_right = st.columns([1, 2.2, 1])
+        with generate_centre:
+            if st.button(
+                "Generate pattern options",
+                key="generate_pattern_analyser_options",
+                type="primary",
+                use_container_width=True,
+            ):
+                try:
+                    candidates = generate_pattern_analyser_candidates(
+                        int(heat_load_count),
+                        float(heat_per_person),
+                        float(clear_spacing),
+                        float(wall_clearance),
+                    )
+                    st.session_state.pattern_analyser_candidates = candidates
+                    st.session_state.occupancy_preview_pattern = None
+                    st.session_state.confirmed_occupancy_pattern = None
+                    st.session_state.confirmed_pattern_analyser_metadata = None
+                    st.success(f"Generated {len(candidates)} candidate pattern(s). Select one and confirm it below.")
+                except Exception as error:
+                    st.session_state.pop("pattern_analyser_candidates", None)
+                    st.error(str(error))
+
+        candidates = st.session_state.get("pattern_analyser_candidates", {})
+        if candidates:
+            candidate_options = list(candidates.keys())
+            selected_pattern = st.selectbox(
+                "Select one generated pattern",
+                options=candidate_options,
+                key="selected_pattern_analyser_candidate",
+                help="After selecting a generated pattern, press Confirm to show the layout figure.",
+            )
+            selected_metadata = candidates[selected_pattern]
+
+            metric1, metric2, metric3, metric4 = st.columns(4)
+            metric1.metric("Generated heat loads", f"{selected_metadata['occupant_count']}")
+            metric2.metric("Heat per load", f"{selected_metadata['heat_per_person']:.0f} W")
+            metric3.metric("Total heat load", f"{selected_metadata['total_heat_load']:.0f} W")
+            metric4.metric("Clear spacing", selected_metadata.get("spacing_value", "--"))
+
+            st.info(
+                f"Selected layout type: {selected_metadata.get('arrangement', 'Generated layout')}. "
+                f"{selected_metadata.get('validity_note', '')}"
+            )
+
+            confirm_left, confirm_centre, confirm_right = st.columns([1, 2.2, 1])
+            with confirm_centre:
+                if st.button(
+                    "Confirm analysed pattern and show figure",
+                    key="preview_selected_analyser_pattern",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.occupancy_preview_pattern = selected_pattern
+                    confirmed_metadata = dict(selected_metadata)
+                    confirmed_metadata["pattern_name"] = selected_pattern
+                    st.session_state.confirmed_pattern_analyser_metadata = confirmed_metadata
+                    st.session_state.confirmed_occupancy_pattern = None
+                    st.session_state.confirmed_measurement_delta_t = False
+                    st.session_state.confirmed_richardson = False
+                    st.session_state.confirmed_wells_riley = False
+                    st.session_state.pop("measurement_delta_t_result", None)
+                    st.session_state.pop("ri_result", None)
+                    st.session_state.pop("wr_result", None)
+                    st.rerun()
+        else:
+            st.info("Enter the required heat-load number and click Generate pattern options.")
 
     preview_pattern = st.session_state.get("occupancy_preview_pattern")
+    if not preview_pattern:
+        if pattern_source == "Reference patterns":
+            st.info("Select Pattern 1, Pattern 2 or Null Pattern, then confirm the selection to display its figure.")
+        return
 
-    if preview_pattern != selected_pattern:
-        st.info("Select Pattern 1, Pattern 2 or Null Pattern, then confirm the selection to display its figure.")
+    if pattern_source == "Pattern Analyser" and preview_pattern not in st.session_state.get("pattern_analyser_candidates", {}) and not get_generated_pattern_metadata(preview_pattern):
+        st.warning("The confirmed generated pattern is no longer available. Generate and confirm a pattern again.")
+        return
+
+    if pattern_source == "Reference patterns" and preview_pattern not in ["Pattern 1", "Pattern 2", "Null Pattern"]:
+        st.info("Select and confirm a reference pattern to display its figure.")
         return
 
     st.markdown("---")
@@ -1397,23 +1927,25 @@ def occupancy_page() -> None:
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
-    if preview_pattern == "Null Pattern":
-        occupant_count = 0
-        heat_per_occupant = 0
-        total_occupant_load = 0
-    else:
-        occupant_count = 6
-        heat_per_occupant = HUMAN_HEAT_LOAD
-        total_occupant_load = occupant_count * heat_per_occupant
+    heat_summary = get_pattern_heat_summary(preview_pattern)
+    occupant_count = heat_summary["occupant_count"]
+    heat_per_occupant = heat_summary["heat_per_person"]
+    total_occupant_load = heat_summary["total_heat_load"]
 
     metric1, metric2, metric3, metric4 = st.columns(4)
-    metric1.metric("Occupants", f"{occupant_count}")
-    metric2.metric("Heat per occupant", f"{heat_per_occupant} W")
-    metric3.metric("Total occupant load", f"{total_occupant_load} W")
+    metric1.metric("Heat loads", f"{occupant_count}")
+    metric2.metric("Heat per load", f"{heat_per_occupant:.0f} W")
+    metric3.metric("Total heat load", f"{total_occupant_load:.0f} W")
     metric4.metric("Room volume", "63.50 m³")
 
-    if preview_pattern == "Null Pattern":
-        st.info("Null Pattern contains no human heat loads. Only S1, S2 and E1 are shown in the room layout.")
+    _, _, _, _, pattern_metadata = get_pattern_layout(preview_pattern)
+    if occupant_count == 0:
+        st.info("This pattern contains no human heat loads. Only S1, S2 and E1 are shown in the room layout.")
+    elif pattern_metadata.get("group") == "Pattern Analyser":
+        st.info(
+            f"Pattern Analyser layout: {pattern_metadata.get('arrangement', 'Generated layout')}. "
+            f"{pattern_metadata.get('validity_note', '')}"
+        )
 
     st.markdown("### Measurement locations")
     measure_left, measure_centre, measure_right = st.columns([0.80, 4.10, 0.80])
@@ -1431,21 +1963,22 @@ def occupancy_page() -> None:
 
     action_left, action_centre, action_right = st.columns([1, 2.2, 1])
 
+    safe_pattern_name = preview_pattern.lower().replace(" ", "_").replace("—", "-").replace("/", "_")
     with action_centre:
         st.download_button(
             label=f"⬇ Download {preview_pattern} figure",
             data=png_data,
-            file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}.png",
+            file_name=f"atlice_{safe_pattern_name}.png",
             mime="image/png",
-            key=f"download_preview_{preview_pattern}",
+            key=f"download_preview_{safe_pattern_name}",
             use_container_width=True,
         )
         st.download_button(
             label=f"⬇ Download {preview_pattern} measurement-locations figure",
             data=measurement_png_data,
-            file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}_measurement_locations.png",
+            file_name=f"atlice_{safe_pattern_name}_measurement_locations.png",
             mime="image/png",
-            key=f"download_measurement_{preview_pattern}",
+            key=f"download_measurement_{safe_pattern_name}",
             use_container_width=True,
         )
 
@@ -1456,6 +1989,12 @@ def occupancy_page() -> None:
             use_container_width=True,
         ):
             st.session_state.confirmed_occupancy_pattern = preview_pattern
+            if pattern_metadata.get("group") == "Pattern Analyser":
+                confirmed_metadata = dict(pattern_metadata)
+                confirmed_metadata["pattern_name"] = preview_pattern
+                st.session_state.confirmed_pattern_analyser_metadata = confirmed_metadata
+            else:
+                st.session_state.confirmed_pattern_analyser_metadata = None
             st.session_state.confirmed_measurement_delta_t = False
             st.session_state.confirmed_richardson = False
             st.session_state.confirmed_wells_riley = False
@@ -1464,6 +2003,7 @@ def occupancy_page() -> None:
             st.session_state.pop("wr_result", None)
             st.session_state.current_page = "measurement"
             st.rerun()
+
 
 
 # =========================================================
@@ -1643,20 +2183,7 @@ def draw_measurement_delta_t_locations(ax, delta_t_result: dict):
 
 def create_measurement_delta_t_map_figure(pattern_name: str, delta_t_result: dict):
     """Create room measurement-location map with ΔT shown in brackets."""
-    if pattern_name == "Pattern 1":
-        positions, dimensions = get_pattern_1_positions()
-        dimension_function = draw_pattern_1_dimensions
-        show_occupants = True
-    elif pattern_name == "Pattern 2":
-        positions, dimensions = get_pattern_2_positions()
-        dimension_function = draw_pattern_2_dimensions
-        show_occupants = True
-    elif pattern_name == "Null Pattern":
-        positions, dimensions = {}, {}
-        dimension_function = None
-        show_occupants = False
-    else:
-        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+    positions, dimensions, dimension_function, show_occupants, metadata = get_pattern_layout(pattern_name)
 
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
@@ -3003,6 +3530,19 @@ Local infection probability: {result['p_local'] * 100:.4f}%
 
 def get_pattern_configuration(pattern_name: str) -> dict:
     """Return the selected arrangement and its clear-distance summary."""
+    generated_metadata = get_generated_pattern_metadata(pattern_name)
+    if generated_metadata is not None:
+        return {
+            "group": generated_metadata.get("group", "Pattern Analyser"),
+            "arrangement": generated_metadata.get("arrangement", "Generated occupancy pattern"),
+            "spacing_label": generated_metadata.get("spacing_label", "Minimum requested clear spacing"),
+            "spacing_value": generated_metadata.get("spacing_value", "Not specified"),
+            "separation_label": generated_metadata.get("separation_label", "Generated layout type"),
+            "separation_value": generated_metadata.get("separation_value", pattern_name),
+            "side_clearance": generated_metadata.get("side_clearance", "Generated by Pattern Analyser"),
+            "door_clearance": generated_metadata.get("door_clearance", "Generated by Pattern Analyser"),
+        }
+
     if pattern_name == "Pattern 1":
         return {
             "group": "Symmetry Pattern",
@@ -3039,16 +3579,16 @@ def get_pattern_configuration(pattern_name: str) -> dict:
     }
 
 
-
 def get_load_summary(pattern_name=None) -> dict:
     """Calculate the sensible-load airflow used in the study summary.
 
-    Null Pattern contains no human heat loads, so the automatic occupant-load
-    airflow summary is zero.
+    For Pattern Analyser layouts, occupant count and heat per load are taken
+    from the confirmed generated pattern metadata.
     """
-    if pattern_name == "Null Pattern":
-        occupants = 0
-        heat_per_occupant = 0
+    if pattern_name:
+        heat_summary = get_pattern_heat_summary(pattern_name)
+        occupants = int(heat_summary["occupant_count"])
+        heat_per_occupant = float(heat_summary["heat_per_person"])
     else:
         occupants = 6
         heat_per_occupant = HUMAN_HEAT_LOAD
@@ -3347,6 +3887,9 @@ def reset_complete_analysis() -> None:
     keys_to_remove = [
         "occupancy_preview_pattern",
         "confirmed_occupancy_pattern",
+        "confirmed_pattern_analyser_metadata",
+        "pattern_analyser_candidates",
+        "selected_pattern_analyser_candidate",
         "measurement_delta_t_result",
         "ri_result",
         "wr_result",
@@ -3520,7 +4063,7 @@ def complete_report_page() -> None:
         st.download_button(
             label="⬇ Download formatted HTML report",
             data=report_html.encode("utf-8"),
-            file_name=f"ATLiCE_{pattern_name.replace(' ', '_')}_complete_report.html",
+            file_name=f"ATLiCE_{pattern_name.replace(' ', '_').replace('—', '-')}_complete_report.html",
             mime="text/html",
             key="download_complete_html_report",
             use_container_width=True,
@@ -3529,7 +4072,7 @@ def complete_report_page() -> None:
         st.download_button(
             label="⬇ Download text report",
             data=report_text,
-            file_name=f"ATLiCE_{pattern_name.replace(' ', '_')}_complete_report.txt",
+            file_name=f"ATLiCE_{pattern_name.replace(' ', '_').replace('—', '-')}_complete_report.txt",
             mime="text/plain",
             key="download_complete_text_report",
             use_container_width=True,
