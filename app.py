@@ -1,8 +1,11 @@
 import base64
 import html
 import math
+import os
+import re
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -679,6 +682,399 @@ def get_pattern_2_positions():
     return positions, dimensions
 
 
+# =========================================================
+# PATTERN ANALYSER ENGINE
+# =========================================================
+PATTERN_ANALYSER_MAX_HEAT_LOADS = 12
+DEFAULT_ANALYSER_WALL_CLEARANCE = 0.65
+DEFAULT_ANALYSER_CLEAR_SPACING = 0.70
+
+
+def evenly_spaced_values(start_value: float, end_value: float, count: int) -> list[float]:
+    """Return evenly spaced coordinate values between two bounds."""
+    if count <= 0:
+        return []
+    if count == 1:
+        return [(start_value + end_value) / 2]
+    step = (end_value - start_value) / (count - 1)
+    return [start_value + step * index for index in range(count)]
+
+
+def make_labelled_positions(points: list[tuple[float, float]]) -> dict:
+    """Convert point coordinates into H1, H2, ... labels."""
+    return {
+        f"H{index + 1}": (round(float(x_value), 3), round(float(y_value), 3))
+        for index, (x_value, y_value) in enumerate(points)
+    }
+
+
+def unique_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Remove repeated points while preserving the original order."""
+    seen = set()
+    cleaned = []
+    for x_value, y_value in points:
+        key = (round(x_value, 3), round(y_value, 3))
+        if key not in seen:
+            seen.add(key)
+            cleaned.append((x_value, y_value))
+    return cleaned
+
+
+def validate_pattern_points(points: list[tuple[float, float]], clear_spacing: float, wall_clearance: float) -> tuple[bool, str]:
+    """Check whether generated heat-load positions are inside the room and not overlapping."""
+    if not points:
+        return True, "No heat loads."
+
+    centre_min_distance = HUMAN_DIAMETER + clear_spacing
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+
+    for label_index, (x_value, y_value) in enumerate(points, start=1):
+        if x_value < x_min or x_value > x_max or y_value < y_min or y_value > y_max:
+            return False, f"H{label_index} is outside the allowed room boundary."
+
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            distance = math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1])
+            if distance < centre_min_distance - 1e-9:
+                return False, (
+                    f"H{i + 1} and H{j + 1} are closer than the requested clear spacing."
+                )
+
+    return True, "Valid pattern."
+
+
+def build_balanced_grid_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate a compact room-balanced grid pattern."""
+    if count <= 0:
+        return []
+
+    usable_length = ROOM_LENGTH - 2 * (wall_clearance + HUMAN_RADIUS)
+    usable_width = ROOM_WIDTH - 2 * (wall_clearance + HUMAN_RADIUS)
+    aspect_ratio = usable_length / usable_width if usable_width > 0 else 1.0
+
+    columns = max(1, math.ceil(math.sqrt(count * aspect_ratio)))
+    rows = math.ceil(count / columns)
+
+    x_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_LENGTH - wall_clearance - HUMAN_RADIUS,
+        columns,
+    )
+    y_values = evenly_spaced_values(
+        ROOM_WIDTH - wall_clearance - HUMAN_RADIUS,
+        wall_clearance + HUMAN_RADIUS,
+        rows,
+    )
+
+    points = []
+    for row_index, y_value in enumerate(y_values):
+        row_x_values = x_values if row_index % 2 == 0 else list(reversed(x_values))
+        for x_value in row_x_values:
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_row_distribution_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate occupants mainly distributed across horizontal rows."""
+    if count <= 0:
+        return []
+    rows = max(1, min(3, math.ceil(count / 4)))
+    columns = math.ceil(count / rows)
+    x_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_LENGTH - wall_clearance - HUMAN_RADIUS,
+        columns,
+    )
+    y_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_WIDTH - wall_clearance - HUMAN_RADIUS,
+        rows,
+    )
+    points = []
+    for row_index, y_value in enumerate(y_values):
+        row_x_values = x_values if row_index % 2 == 0 else list(reversed(x_values))
+        for x_value in row_x_values:
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_column_distribution_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate occupants mainly distributed along vertical columns."""
+    if count <= 0:
+        return []
+    columns = max(1, min(4, math.ceil(count / 3)))
+    rows = math.ceil(count / columns)
+    x_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_LENGTH - wall_clearance - HUMAN_RADIUS,
+        columns,
+    )
+    y_values = evenly_spaced_values(
+        wall_clearance + HUMAN_RADIUS,
+        ROOM_WIDTH - wall_clearance - HUMAN_RADIUS,
+        rows,
+    )
+    points = []
+    for column_index, x_value in enumerate(x_values):
+        column_y_values = y_values if column_index % 2 == 0 else list(reversed(y_values))
+        for y_value in column_y_values:
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_staggered_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate a staggered pattern to avoid strict row alignment."""
+    if count <= 0:
+        return []
+    rows = max(1, min(3, math.ceil(math.sqrt(count))))
+    columns = math.ceil(count / rows)
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+    x_values = evenly_spaced_values(x_min, x_max, columns)
+    y_values = evenly_spaced_values(y_max, y_min, rows)
+    x_step = (x_values[1] - x_values[0]) if len(x_values) > 1 else 0.0
+
+    points = []
+    for row_index, y_value in enumerate(y_values):
+        for x_value in x_values:
+            shifted_x = x_value + (0.35 * x_step if row_index % 2 == 1 else 0.0)
+            shifted_x = min(max(shifted_x, x_min), x_max)
+            points.append((shifted_x, y_value))
+            if len(points) == count:
+                return points
+    return points[:count]
+
+
+def build_central_cluster_points(count: int, wall_clearance: float, clear_spacing: float) -> list[tuple[float, float]]:
+    """Generate a central clustered pattern using a compact grid around room centre."""
+    if count <= 0:
+        return []
+    spacing = max(HUMAN_DIAMETER + clear_spacing, 0.55)
+    columns = max(1, math.ceil(math.sqrt(count)))
+    rows = math.ceil(count / columns)
+    centre_x = ROOM_LENGTH / 2
+    centre_y = ROOM_WIDTH / 2
+    x_start = centre_x - spacing * (columns - 1) / 2
+    y_start = centre_y + spacing * (rows - 1) / 2
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+
+    points = []
+    for row_index in range(rows):
+        for col_index in range(columns):
+            x_value = min(max(x_start + col_index * spacing, x_min), x_max)
+            y_value = min(max(y_start - row_index * spacing, y_min), y_max)
+            points.append((x_value, y_value))
+            if len(points) == count:
+                return unique_points(points)
+    return unique_points(points[:count])
+
+
+def build_perimeter_points(count: int, wall_clearance: float) -> list[tuple[float, float]]:
+    """Generate a pattern distributed around the measurement zone perimeter."""
+    if count <= 0:
+        return []
+    x_min = wall_clearance + HUMAN_RADIUS
+    x_max = ROOM_LENGTH - wall_clearance - HUMAN_RADIUS
+    y_min = wall_clearance + HUMAN_RADIUS
+    y_max = ROOM_WIDTH - wall_clearance - HUMAN_RADIUS
+
+    edge_points = []
+    for x_value in evenly_spaced_values(x_min, x_max, max(2, min(5, count))):
+        edge_points.append((x_value, y_max))
+    for y_value in evenly_spaced_values(y_max, y_min, max(2, min(4, count)))[1:]:
+        edge_points.append((x_max, y_value))
+    for x_value in list(reversed(evenly_spaced_values(x_min, x_max, max(2, min(5, count)))))[1:]:
+        edge_points.append((x_value, y_min))
+    for y_value in list(reversed(evenly_spaced_values(y_min, y_max, max(2, min(4, count)))))[1:-1]:
+        edge_points.append((x_min, y_value))
+
+    edge_points = unique_points(edge_points)
+    if len(edge_points) <= count:
+        return edge_points[:count]
+
+    selected_indices = [round(index * (len(edge_points) - 1) / (count - 1)) for index in range(count)] if count > 1 else [0]
+    return [edge_points[index] for index in selected_indices]
+
+
+def generate_pattern_analyser_candidates(
+    heat_load_count: int,
+    heat_per_person: float,
+    clear_spacing: float,
+    wall_clearance: float = DEFAULT_ANALYSER_WALL_CLEARANCE,
+) -> dict:
+    """Generate deterministic candidate occupancy patterns for a selected heat-load number."""
+    heat_load_count = int(heat_load_count)
+    heat_per_person = float(heat_per_person)
+    clear_spacing = float(clear_spacing)
+    wall_clearance = float(wall_clearance)
+
+    if heat_load_count < 0:
+        raise ValueError("The number of heat loads cannot be negative.")
+    if heat_load_count > PATTERN_ANALYSER_MAX_HEAT_LOADS:
+        raise ValueError(f"The Pattern Analyser supports up to {PATTERN_ANALYSER_MAX_HEAT_LOADS} heat loads.")
+
+    if heat_load_count == 0:
+        pattern_name = "PA-0 — No Heat-Load Case"
+        return {
+            pattern_name: {
+                "positions": {},
+                "occupant_count": 0,
+                "heat_per_person": 0.0,
+                "total_heat_load": 0.0,
+                "clear_spacing": clear_spacing,
+                "wall_clearance": wall_clearance,
+                "arrangement": "No human heat loads; supply and exhaust units only",
+                "group": "Pattern Analyser",
+                "spacing_label": "Occupant spacing",
+                "spacing_value": "Not applicable",
+                "separation_label": "Generated arrangement",
+                "separation_value": "No heat loads",
+                "side_clearance": "Not applicable because no occupants are present",
+                "door_clearance": "Not applicable because no occupants are present",
+                "validity_note": "No heat loads.",
+            }
+        }
+
+    candidate_builders = [
+        ("Balanced Grid", build_balanced_grid_points, "Room-balanced grid distribution"),
+        ("Row Distribution", build_row_distribution_points, "Row-wise distribution across the room length"),
+        ("Column Distribution", build_column_distribution_points, "Column-wise distribution across the room width"),
+        ("Staggered Distribution", build_staggered_points, "Staggered layout to reduce strict alignment"),
+        ("Central Cluster", build_central_cluster_points, "Clustered arrangement near the room centre"),
+        ("Perimeter Distribution", build_perimeter_points, "Distributed arrangement around the occupied-zone perimeter"),
+    ]
+
+    candidates = {}
+    candidate_index = 1
+    for builder_name, builder_function, arrangement in candidate_builders:
+        if builder_function is build_central_cluster_points:
+            points = builder_function(heat_load_count, wall_clearance, clear_spacing)
+        else:
+            points = builder_function(heat_load_count, wall_clearance)
+
+        points = unique_points(points)
+        if len(points) != heat_load_count:
+            continue
+
+        is_valid, validity_note = validate_pattern_points(points, clear_spacing, wall_clearance)
+        if not is_valid:
+            # Keep the pattern but clearly identify that clear spacing may need adjustment.
+            validity_note = f"Spacing check warning: {validity_note}"
+
+        pattern_name = f"PA-{heat_load_count}.{candidate_index} — {builder_name}"
+        candidates[pattern_name] = {
+            "positions": make_labelled_positions(points),
+            "occupant_count": heat_load_count,
+            "heat_per_person": heat_per_person,
+            "total_heat_load": heat_load_count * heat_per_person,
+            "clear_spacing": clear_spacing,
+            "wall_clearance": wall_clearance,
+            "arrangement": arrangement,
+            "group": "Pattern Analyser",
+            "spacing_label": "Minimum requested clear spacing",
+            "spacing_value": f"{clear_spacing:.2f} m",
+            "separation_label": "Generated layout type",
+            "separation_value": builder_name,
+            "side_clearance": f"Minimum wall clearance used by analyser: {wall_clearance:.2f} m",
+            "door_clearance": f"Minimum wall clearance used by analyser: {wall_clearance:.2f} m",
+            "validity_note": validity_note,
+        }
+        candidate_index += 1
+
+    if not candidates:
+        raise ValueError(
+            "No valid candidate patterns could be generated. Reduce the heat-load number or minimum clear spacing."
+        )
+
+    return candidates
+
+
+def get_generated_pattern_metadata(pattern_name: str) -> dict | None:
+    """Return metadata for a Pattern Analyser layout, if available in session state."""
+    candidates = st.session_state.get("pattern_analyser_candidates", {})
+    if pattern_name in candidates:
+        return candidates[pattern_name]
+
+    confirmed_metadata = st.session_state.get("confirmed_pattern_analyser_metadata")
+    if confirmed_metadata and confirmed_metadata.get("pattern_name") == pattern_name:
+        return confirmed_metadata
+
+    return None
+
+
+def get_pattern_layout(pattern_name: str) -> tuple[dict, dict, object, bool, dict]:
+    """Return positions, dimensions and metadata for both fixed and generated patterns."""
+    if pattern_name == "Pattern 1":
+        positions, dimensions = get_pattern_1_positions()
+        metadata = {
+            "group": "Symmetry Pattern",
+            "arrangement": "Two columns of three occupants",
+            "occupant_count": 6,
+            "heat_per_person": HUMAN_HEAT_LOAD,
+            "total_heat_load": 6 * HUMAN_HEAT_LOAD,
+            "validity_note": "Fixed reference pattern.",
+        }
+        return positions, dimensions, draw_pattern_1_dimensions, True, metadata
+
+    if pattern_name == "Pattern 2":
+        positions, dimensions = get_pattern_2_positions()
+        metadata = {
+            "group": "Symmetry Pattern",
+            "arrangement": "Two rows of three occupants",
+            "occupant_count": 6,
+            "heat_per_person": HUMAN_HEAT_LOAD,
+            "total_heat_load": 6 * HUMAN_HEAT_LOAD,
+            "validity_note": "Fixed reference pattern.",
+        }
+        return positions, dimensions, draw_pattern_2_dimensions, True, metadata
+
+    if pattern_name == "Null Pattern":
+        metadata = {
+            "group": "Null Pattern",
+            "arrangement": "No human loads; supply and exhaust units only",
+            "occupant_count": 0,
+            "heat_per_person": 0,
+            "total_heat_load": 0,
+            "validity_note": "No human heat loads.",
+        }
+        return {}, {}, None, False, metadata
+
+    generated_metadata = get_generated_pattern_metadata(pattern_name)
+    if generated_metadata is not None:
+        positions = generated_metadata.get("positions", {})
+        show_occupants = bool(positions)
+        return positions, {}, None, show_occupants, generated_metadata
+
+    raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+
+
+def get_pattern_heat_summary(pattern_name: str) -> dict:
+    """Return occupant count and heat-load summary for any selected pattern."""
+    _, _, _, _, metadata = get_pattern_layout(pattern_name)
+    occupant_count = int(metadata.get("occupant_count", 0))
+    heat_per_person = float(metadata.get("heat_per_person", HUMAN_HEAT_LOAD if occupant_count else 0))
+    total_heat_load = float(metadata.get("total_heat_load", occupant_count * heat_per_person))
+    return {
+        "occupant_count": occupant_count,
+        "heat_per_person": heat_per_person,
+        "total_heat_load": total_heat_load,
+    }
+
+
 def draw_double_arrow(
     ax,
     start,
@@ -1120,23 +1516,10 @@ def draw_pattern_2_dimensions(ax, positions, dimensions):
 def create_occupancy_figure(pattern_name: str):
     """Create a moderately sized occupancy figure for display inside Streamlit.
 
-    Pattern 1 and Pattern 2 include six human heat loads. Null Pattern shows
-    the room, split-system supply units and exhaust only, without occupants.
+    Fixed patterns use the original Pattern 1 / Pattern 2 dimensions. Pattern
+    Analyser layouts use generated human heat-load positions selected by the user.
     """
-    if pattern_name == "Pattern 1":
-        positions, dimensions = get_pattern_1_positions()
-        dimension_function = draw_pattern_1_dimensions
-        show_occupants = True
-    elif pattern_name == "Pattern 2":
-        positions, dimensions = get_pattern_2_positions()
-        dimension_function = draw_pattern_2_dimensions
-        show_occupants = True
-    elif pattern_name == "Null Pattern":
-        positions, dimensions = {}, {}
-        dimension_function = None
-        show_occupants = False
-    else:
-        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+    positions, dimensions, dimension_function, show_occupants, metadata = get_pattern_layout(pattern_name)
 
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
@@ -1159,10 +1542,14 @@ def create_occupancy_figure(pattern_name: str):
     if dimension_function is not None:
         dimension_function(ax, positions, dimensions)
 
+    upper_note = f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m"
+    if metadata.get("group") == "Pattern Analyser":
+        upper_note = f"Pattern Analyser layout · {metadata.get('arrangement', '')}"
+
     ax.text(
         ROOM_LENGTH / 2,
         ROOM_WIDTH + 0.34,
-        f"Room: {ROOM_LENGTH:.1f} m × {ROOM_WIDTH:.1f} m × {ROOM_HEIGHT:.1f} m",
+        upper_note,
         ha="center",
         va="bottom",
         fontsize=9,
@@ -1171,12 +1558,14 @@ def create_occupancy_figure(pattern_name: str):
 
     legend_items = []
     if show_occupants:
+        occupant_count = int(metadata.get("occupant_count", len(positions)))
+        heat_per_person = float(metadata.get("heat_per_person", HUMAN_HEAT_LOAD))
         legend_items.append(
             Line2D(
                 [0], [0], marker="o", color="none",
                 markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
                 markersize=9,
-                label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+                label=f"H1–H{occupant_count}: Human heat loads ({heat_per_person:.0f} W each)",
             )
         )
     legend_items.extend(
@@ -1212,23 +1601,9 @@ def create_occupancy_figure(pattern_name: str):
     return fig, positions, dimensions
 
 
-
 def create_measurement_locations_figure(pattern_name: str):
     """Create a second figure showing the 12 measurement locations."""
-    if pattern_name == "Pattern 1":
-        positions, dimensions = get_pattern_1_positions()
-        dimension_function = draw_pattern_1_dimensions
-        show_occupants = True
-    elif pattern_name == "Pattern 2":
-        positions, dimensions = get_pattern_2_positions()
-        dimension_function = draw_pattern_2_dimensions
-        show_occupants = True
-    elif pattern_name == "Null Pattern":
-        positions, dimensions = {}, {}
-        dimension_function = None
-        show_occupants = False
-    else:
-        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+    positions, dimensions, dimension_function, show_occupants, metadata = get_pattern_layout(pattern_name)
 
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
@@ -1264,12 +1639,14 @@ def create_measurement_locations_figure(pattern_name: str):
 
     legend_items = []
     if show_occupants:
+        occupant_count = int(metadata.get("occupant_count", len(positions)))
+        heat_per_person = float(metadata.get("heat_per_person", HUMAN_HEAT_LOAD))
         legend_items.append(
             Line2D(
                 [0], [0], marker="o", color="none",
                 markerfacecolor=HUMAN_COLOUR, markeredgecolor="black",
                 markersize=9,
-                label=f"H1–H6: Human heat loads ({HUMAN_HEAT_LOAD} W each)",
+                label=f"H1–H{occupant_count}: Human heat loads ({heat_per_person:.0f} W each)",
             )
         )
     legend_items.extend(
@@ -1321,6 +1698,7 @@ def reset_occupancy_workflow() -> None:
     """Clear the preview and every downstream result after a pattern change."""
     st.session_state.occupancy_preview_pattern = None
     st.session_state.confirmed_occupancy_pattern = None
+    st.session_state.confirmed_pattern_analyser_metadata = None
     st.session_state.confirmed_measurement_delta_t = False
     st.session_state.confirmed_richardson = False
     st.session_state.confirmed_wells_riley = False
@@ -1330,60 +1708,215 @@ def reset_occupancy_workflow() -> None:
     st.session_state.pop("confirmed_delta_map_plot", None)
     st.session_state.pop("confirmed_individual_plot_label", None)
     st.session_state.pop("confirmed_compare_plot_items", None)
+    st.session_state.pop("confirmed_all_vs_average_plot", None)
 
 
-
-
-
+def clear_generated_candidates() -> None:
+    """Clear Pattern Analyser candidates when generator inputs are changed."""
+    reset_occupancy_workflow()
+    st.session_state.pop("pattern_analyser_candidates", None)
+    st.session_state.pop("selected_pattern_analyser_candidate", None)
 
 
 def occupancy_page() -> None:
     render_page_heading(
         "👥",
         "Occupancy Patterns",
-        "Choose a symmetry pattern, preview its layout, and confirm it before continuing.",
+        "Choose a fixed pattern or use the Pattern Analyser to generate layouts for a selected heat-load number.",
     )
 
     st.session_state.setdefault("occupancy_pattern", "Pattern 1")
+    st.session_state.setdefault("pattern_source", "Reference patterns")
     st.session_state.setdefault("occupancy_preview_pattern", None)
     st.session_state.setdefault("confirmed_occupancy_pattern", None)
+    st.session_state.setdefault("confirmed_pattern_analyser_metadata", None)
     st.session_state.setdefault("confirmed_measurement_delta_t", False)
     st.session_state.setdefault("confirmed_richardson", False)
     st.session_state.setdefault("confirmed_wells_riley", False)
 
-    st.markdown("### Symmetry Pattern")
+    st.markdown("### Occupancy pattern selection")
 
-    selection_left, selection_centre, selection_right = st.columns([1, 2.2, 1])
-
-    with selection_centre:
-        selected_pattern = st.radio(
-            "Choose a pattern",
-            options=["Pattern 1", "Pattern 2", "Null Pattern"],
-            key="occupancy_pattern",
+    source_left, source_centre, source_right = st.columns([0.85, 2.7, 0.85])
+    with source_centre:
+        pattern_source = st.radio(
+            "Choose pattern source",
+            options=["Reference patterns", "Pattern Analyser"],
+            key="pattern_source",
             horizontal=True,
             on_change=reset_occupancy_workflow,
+            help="Reference patterns keep the original Pattern 1, Pattern 2 and Null Pattern. Pattern Analyser creates candidate layouts from the selected heat-load number.",
         )
 
-        if st.button(
-            "Confirm selection and show figure",
-            key="preview_selected_pattern",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state.occupancy_preview_pattern = selected_pattern
-            st.session_state.confirmed_occupancy_pattern = None
-            st.session_state.confirmed_measurement_delta_t = False
-            st.session_state.confirmed_richardson = False
-            st.session_state.confirmed_wells_riley = False
-            st.session_state.pop("measurement_delta_t_result", None)
-            st.session_state.pop("ri_result", None)
-            st.session_state.pop("wr_result", None)
-            st.rerun()
+    selected_pattern = None
+
+    if pattern_source == "Reference patterns":
+        st.markdown("### Reference patterns")
+        selection_left, selection_centre, selection_right = st.columns([1, 2.2, 1])
+
+        with selection_centre:
+            selected_pattern = st.radio(
+                "Choose a pattern",
+                options=["Pattern 1", "Pattern 2", "Null Pattern"],
+                key="occupancy_pattern",
+                horizontal=True,
+                on_change=reset_occupancy_workflow,
+            )
+
+            if st.button(
+                "Confirm selection and show figure",
+                key="preview_selected_reference_pattern",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.occupancy_preview_pattern = selected_pattern
+                st.session_state.confirmed_occupancy_pattern = None
+                st.session_state.confirmed_pattern_analyser_metadata = None
+                st.session_state.confirmed_measurement_delta_t = False
+                st.session_state.confirmed_richardson = False
+                st.session_state.confirmed_wells_riley = False
+                st.session_state.pop("measurement_delta_t_result", None)
+                st.session_state.pop("ri_result", None)
+                st.session_state.pop("wr_result", None)
+                st.rerun()
+
+    else:
+        st.markdown("### Pattern Analyser")
+        st.markdown(
+            """
+            <div class="section-card">
+                <h3>Generate candidate heat-load layouts</h3>
+                <p>
+                    Enter the number of human heat loads and the Pattern Analyser will create
+                    repeatable candidate layouts with scientific pattern names. This is not an
+                    online AI call; it is a deterministic layout analyser for controlled experiments.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        input_col1, input_col2, input_col3, input_col4 = st.columns(4)
+        with input_col1:
+            heat_load_count = st.number_input(
+                "Number of human heat loads",
+                min_value=0,
+                max_value=PATTERN_ANALYSER_MAX_HEAT_LOADS,
+                value=6,
+                step=1,
+                key="pattern_analyser_heat_load_count",
+                on_change=clear_generated_candidates,
+            )
+        with input_col2:
+            heat_per_person = st.number_input(
+                "Heat per load (W)",
+                min_value=0.0,
+                value=float(HUMAN_HEAT_LOAD),
+                step=5.0,
+                key="pattern_analyser_heat_per_person",
+                on_change=clear_generated_candidates,
+            )
+        with input_col3:
+            clear_spacing = st.number_input(
+                "Minimum clear spacing (m)",
+                min_value=0.10,
+                max_value=1.50,
+                value=DEFAULT_ANALYSER_CLEAR_SPACING,
+                step=0.05,
+                key="pattern_analyser_clear_spacing",
+                on_change=clear_generated_candidates,
+            )
+        with input_col4:
+            wall_clearance = st.number_input(
+                "Minimum wall clearance (m)",
+                min_value=0.20,
+                max_value=1.50,
+                value=DEFAULT_ANALYSER_WALL_CLEARANCE,
+                step=0.05,
+                key="pattern_analyser_wall_clearance",
+                on_change=clear_generated_candidates,
+            )
+
+        generate_left, generate_centre, generate_right = st.columns([1, 2.2, 1])
+        with generate_centre:
+            if st.button(
+                "Generate pattern options",
+                key="generate_pattern_analyser_options",
+                type="primary",
+                use_container_width=True,
+            ):
+                try:
+                    candidates = generate_pattern_analyser_candidates(
+                        int(heat_load_count),
+                        float(heat_per_person),
+                        float(clear_spacing),
+                        float(wall_clearance),
+                    )
+                    st.session_state.pattern_analyser_candidates = candidates
+                    st.session_state.occupancy_preview_pattern = None
+                    st.session_state.confirmed_occupancy_pattern = None
+                    st.session_state.confirmed_pattern_analyser_metadata = None
+                    st.success(f"Generated {len(candidates)} candidate pattern(s). Select one and confirm it below.")
+                except Exception as error:
+                    st.session_state.pop("pattern_analyser_candidates", None)
+                    st.error(str(error))
+
+        candidates = st.session_state.get("pattern_analyser_candidates", {})
+        if candidates:
+            candidate_options = list(candidates.keys())
+            selected_pattern = st.selectbox(
+                "Select one generated pattern",
+                options=candidate_options,
+                key="selected_pattern_analyser_candidate",
+                help="After selecting a generated pattern, press Confirm to show the layout figure.",
+            )
+            selected_metadata = candidates[selected_pattern]
+
+            metric1, metric2, metric3, metric4 = st.columns(4)
+            metric1.metric("Generated heat loads", f"{selected_metadata['occupant_count']}")
+            metric2.metric("Heat per load", f"{selected_metadata['heat_per_person']:.0f} W")
+            metric3.metric("Total heat load", f"{selected_metadata['total_heat_load']:.0f} W")
+            metric4.metric("Clear spacing", selected_metadata.get("spacing_value", "--"))
+
+            st.info(
+                f"Selected layout type: {selected_metadata.get('arrangement', 'Generated layout')}. "
+                f"{selected_metadata.get('validity_note', '')}"
+            )
+
+            confirm_left, confirm_centre, confirm_right = st.columns([1, 2.2, 1])
+            with confirm_centre:
+                if st.button(
+                    "Confirm analysed pattern and show figure",
+                    key="preview_selected_analyser_pattern",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.occupancy_preview_pattern = selected_pattern
+                    confirmed_metadata = dict(selected_metadata)
+                    confirmed_metadata["pattern_name"] = selected_pattern
+                    st.session_state.confirmed_pattern_analyser_metadata = confirmed_metadata
+                    st.session_state.confirmed_occupancy_pattern = None
+                    st.session_state.confirmed_measurement_delta_t = False
+                    st.session_state.confirmed_richardson = False
+                    st.session_state.confirmed_wells_riley = False
+                    st.session_state.pop("measurement_delta_t_result", None)
+                    st.session_state.pop("ri_result", None)
+                    st.session_state.pop("wr_result", None)
+                    st.rerun()
+        else:
+            st.info("Enter the required heat-load number and click Generate pattern options.")
 
     preview_pattern = st.session_state.get("occupancy_preview_pattern")
+    if not preview_pattern:
+        if pattern_source == "Reference patterns":
+            st.info("Select Pattern 1, Pattern 2 or Null Pattern, then confirm the selection to display its figure.")
+        return
 
-    if preview_pattern != selected_pattern:
-        st.info("Select Pattern 1, Pattern 2 or Null Pattern, then confirm the selection to display its figure.")
+    if pattern_source == "Pattern Analyser" and preview_pattern not in st.session_state.get("pattern_analyser_candidates", {}) and not get_generated_pattern_metadata(preview_pattern):
+        st.warning("The confirmed generated pattern is no longer available. Generate and confirm a pattern again.")
+        return
+
+    if pattern_source == "Reference patterns" and preview_pattern not in ["Pattern 1", "Pattern 2", "Null Pattern"]:
+        st.info("Select and confirm a reference pattern to display its figure.")
         return
 
     st.markdown("---")
@@ -1397,23 +1930,25 @@ def occupancy_page() -> None:
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
 
-    if preview_pattern == "Null Pattern":
-        occupant_count = 0
-        heat_per_occupant = 0
-        total_occupant_load = 0
-    else:
-        occupant_count = 6
-        heat_per_occupant = HUMAN_HEAT_LOAD
-        total_occupant_load = occupant_count * heat_per_occupant
+    heat_summary = get_pattern_heat_summary(preview_pattern)
+    occupant_count = heat_summary["occupant_count"]
+    heat_per_occupant = heat_summary["heat_per_person"]
+    total_occupant_load = heat_summary["total_heat_load"]
 
     metric1, metric2, metric3, metric4 = st.columns(4)
-    metric1.metric("Occupants", f"{occupant_count}")
-    metric2.metric("Heat per occupant", f"{heat_per_occupant} W")
-    metric3.metric("Total occupant load", f"{total_occupant_load} W")
+    metric1.metric("Heat loads", f"{occupant_count}")
+    metric2.metric("Heat per load", f"{heat_per_occupant:.0f} W")
+    metric3.metric("Total heat load", f"{total_occupant_load:.0f} W")
     metric4.metric("Room volume", "63.50 m³")
 
-    if preview_pattern == "Null Pattern":
-        st.info("Null Pattern contains no human heat loads. Only S1, S2 and E1 are shown in the room layout.")
+    _, _, _, _, pattern_metadata = get_pattern_layout(preview_pattern)
+    if occupant_count == 0:
+        st.info("This pattern contains no human heat loads. Only S1, S2 and E1 are shown in the room layout.")
+    elif pattern_metadata.get("group") == "Pattern Analyser":
+        st.info(
+            f"Pattern Analyser layout: {pattern_metadata.get('arrangement', 'Generated layout')}. "
+            f"{pattern_metadata.get('validity_note', '')}"
+        )
 
     st.markdown("### Measurement locations")
     measure_left, measure_centre, measure_right = st.columns([0.80, 4.10, 0.80])
@@ -1431,21 +1966,22 @@ def occupancy_page() -> None:
 
     action_left, action_centre, action_right = st.columns([1, 2.2, 1])
 
+    safe_pattern_name = preview_pattern.lower().replace(" ", "_").replace("—", "-").replace("/", "_")
     with action_centre:
         st.download_button(
             label=f"⬇ Download {preview_pattern} figure",
             data=png_data,
-            file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}.png",
+            file_name=f"atlice_{safe_pattern_name}.png",
             mime="image/png",
-            key=f"download_preview_{preview_pattern}",
+            key=f"download_preview_{safe_pattern_name}",
             use_container_width=True,
         )
         st.download_button(
             label=f"⬇ Download {preview_pattern} measurement-locations figure",
             data=measurement_png_data,
-            file_name=f"atlice_{preview_pattern.lower().replace(' ', '_')}_measurement_locations.png",
+            file_name=f"atlice_{safe_pattern_name}_measurement_locations.png",
             mime="image/png",
-            key=f"download_measurement_{preview_pattern}",
+            key=f"download_measurement_{safe_pattern_name}",
             use_container_width=True,
         )
 
@@ -1456,6 +1992,12 @@ def occupancy_page() -> None:
             use_container_width=True,
         ):
             st.session_state.confirmed_occupancy_pattern = preview_pattern
+            if pattern_metadata.get("group") == "Pattern Analyser":
+                confirmed_metadata = dict(pattern_metadata)
+                confirmed_metadata["pattern_name"] = preview_pattern
+                st.session_state.confirmed_pattern_analyser_metadata = confirmed_metadata
+            else:
+                st.session_state.confirmed_pattern_analyser_metadata = None
             st.session_state.confirmed_measurement_delta_t = False
             st.session_state.confirmed_richardson = False
             st.session_state.confirmed_wells_riley = False
@@ -1464,6 +2006,7 @@ def occupancy_page() -> None:
             st.session_state.pop("wr_result", None)
             st.session_state.current_page = "measurement"
             st.rerun()
+
 
 
 # =========================================================
@@ -1477,19 +2020,29 @@ RICHARDSON_TOTAL_HEIGHT = 2.70
 
 
 
-def read_delta_t_from_excel(uploaded_file) -> dict:
-    """Read only the third column of an uploaded Excel file and calculate ΔT.
+def read_delta_t_from_excel(excel_source) -> dict:
+    """Read only the third column of an Excel file and calculate ΔT.
 
+    This function accepts either a Streamlit uploaded file or a local file path.
     The first and second columns are ignored. Non-numeric values in the third
     column, including a header such as Temperature_C, are automatically skipped.
     The retained numeric values are assigned heights beginning at 0.2 m and
     increasing by 0.1 m for each subsequent reading.
     """
-    uploaded_file.seek(0)
-    dataframe = pd.read_excel(uploaded_file, header=None)
+    source_path = None
+
+    if isinstance(excel_source, (str, os.PathLike, Path)):
+        source_path = Path(excel_source)
+        display_name = source_path.name
+        dataframe = pd.read_excel(source_path, header=None)
+    else:
+        if hasattr(excel_source, "seek"):
+            excel_source.seek(0)
+        display_name = getattr(excel_source, "name", "uploaded_excel_file.xlsx")
+        dataframe = pd.read_excel(excel_source, header=None)
 
     if dataframe.shape[1] < 3:
-        raise ValueError("The uploaded Excel file must contain at least three columns.")
+        raise ValueError("The Excel file must contain at least three columns.")
 
     temperature_values = pd.to_numeric(dataframe.iloc[:, 2], errors="coerce").dropna().reset_index(drop=True)
 
@@ -1510,7 +2063,8 @@ def read_delta_t_from_excel(uploaded_file) -> dict:
     assumed_last_height = MEASUREMENT_HEIGHT_START + MEASUREMENT_HEIGHT_STEP * (number_of_readings - 1)
 
     return {
-        "file_name": uploaded_file.name,
+        "file_name": display_name,
+        "source_path": str(source_path) if source_path is not None else "Uploaded manually",
         "minimum_temperature": minimum_temperature,
         "maximum_temperature": maximum_temperature,
         "mean_temperature": mean_temperature,
@@ -1522,6 +2076,240 @@ def read_delta_t_from_excel(uploaded_file) -> dict:
     }
 
 
+EXCEL_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
+
+
+def extract_measurement_label_from_filename(file_name: str):
+    """Return M1–M12 if the file name contains a clear measurement label."""
+    stem = Path(file_name).stem
+    patterns = [
+        r"(?<![A-Za-z0-9])M\s*0?([1-9]|1[0-2])(?![A-Za-z0-9])",
+        r"(?<![A-Za-z0-9])LOC(?:ATION)?\s*0?([1-9]|1[0-2])(?![A-Za-z0-9])",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, stem, flags=re.IGNORECASE)
+        if match:
+            return f"M{int(match.group(1))}"
+    return None
+
+
+def get_excel_files_in_folder(folder_path, recursive: bool = False) -> list[Path]:
+    """Return Excel files inside a folder, ignoring temporary Excel lock files."""
+    folder = Path(folder_path).expanduser()
+    if not folder.exists():
+        raise FileNotFoundError(f"Folder does not exist: {folder}")
+    if not folder.is_dir():
+        raise NotADirectoryError(f"This is not a folder: {folder}")
+
+    iterator = folder.rglob("*") if recursive else folder.iterdir()
+    files = []
+    for item in iterator:
+        if item.is_file() and item.suffix.lower() in EXCEL_EXTENSIONS and not item.name.startswith("~$"):
+            files.append(item)
+    return sorted(files, key=lambda item: item.name.lower())
+
+
+def get_subfolders_with_excel(root_folder, include_root: bool = True, recursive_excel_search: bool = False) -> list[dict]:
+    """Return scenario folders that contain Excel files.
+
+    The root folder can be a synced Google Drive folder, for example:
+    /Users/your_name/Library/CloudStorage/GoogleDrive-.../pattern
+    """
+    root = Path(root_folder).expanduser()
+    if not root.exists():
+        raise FileNotFoundError(f"Folder does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"This is not a folder: {root}")
+
+    scenario_rows = []
+
+    if include_root:
+        root_files = get_excel_files_in_folder(root, recursive=False)
+        if root_files:
+            scenario_rows.append(
+                {
+                    "scenario_name": root.name,
+                    "folder_path": str(root),
+                    "excel_count": len(root_files),
+                }
+            )
+
+    for subfolder in sorted([item for item in root.iterdir() if item.is_dir()], key=lambda item: item.name.lower()):
+        excel_files = get_excel_files_in_folder(subfolder, recursive=recursive_excel_search)
+        if excel_files:
+            scenario_rows.append(
+                {
+                    "scenario_name": subfolder.name,
+                    "folder_path": str(subfolder),
+                    "excel_count": len(excel_files),
+                }
+            )
+
+    return scenario_rows
+
+
+def map_excel_files_to_measurements(excel_files: list[Path], mapping_mode: str) -> tuple[dict, list[str]]:
+    """Map Excel files to M1–M12 either by file name or sorted order."""
+    warnings = []
+    file_mapping = {}
+
+    if mapping_mode == "Use sorted file order as M1–M12":
+        for index, excel_file in enumerate(sorted(excel_files, key=lambda item: item.name.lower())[:12], start=1):
+            file_mapping[f"M{index}"] = excel_file
+        if len(excel_files) > 12:
+            warnings.append("More than 12 Excel files were found. Only the first 12 files in sorted order were used.")
+        return file_mapping, warnings
+
+    unmatched = []
+    for excel_file in excel_files:
+        measurement_label = extract_measurement_label_from_filename(excel_file.name)
+        if measurement_label is None:
+            unmatched.append(excel_file.name)
+            continue
+        if measurement_label in file_mapping:
+            warnings.append(
+                f"Duplicate file label {measurement_label} was found. Kept {file_mapping[measurement_label].name} and skipped {excel_file.name}."
+            )
+            continue
+        file_mapping[measurement_label] = excel_file
+
+    if unmatched:
+        warnings.append(
+            "Files without a clear M1–M12 label were skipped: " + ", ".join(unmatched[:8]) + (" ..." if len(unmatched) > 8 else "")
+        )
+
+    return dict(sorted(file_mapping.items(), key=lambda item: int(item[0].replace("M", "")))), warnings
+
+
+def build_delta_t_result_from_file_mapping(
+    file_mapping: dict,
+    pattern_name: str,
+    data_source: str,
+    scenario_name: str = "",
+    source_folder: str = "",
+) -> tuple[dict, list[str]]:
+    """Process mapped Excel files and return the standard measurement result object."""
+    results = {}
+    errors = []
+
+    for measurement_label, excel_source in file_mapping.items():
+        try:
+            results[measurement_label] = read_delta_t_from_excel(excel_source)
+        except Exception as error:
+            errors.append(f"{measurement_label}: {Path(str(excel_source)).name}: {error}")
+
+    if errors:
+        return {}, errors
+
+    if not results:
+        return {}, ["No valid M1–M12 Excel files were found for this scenario."]
+
+    delta_t_result = {
+        "pattern_name": pattern_name,
+        "height_start": MEASUREMENT_HEIGHT_START,
+        "height_step": MEASUREMENT_HEIGHT_STEP,
+        "expected_height_end": MEASUREMENT_EXPECTED_HEIGHT_END,
+        "expected_count": MEASUREMENT_EXPECTED_COUNT,
+        "richardson_total_height": RICHARDSON_TOTAL_HEIGHT,
+        "data_source": data_source,
+        "scenario_name": scenario_name,
+        "source_folder": source_folder,
+        "results": results,
+    }
+    return delta_t_result, []
+
+
+def build_scenario_summary_dataframe(scenario_results: dict) -> pd.DataFrame:
+    """Create one summary row per processed scenario folder."""
+    rows = []
+    for scenario_name, delta_t_result in scenario_results.items():
+        measurement_dataframe = get_measurement_delta_t_dataframe(delta_t_result)
+        room_stats = get_room_temperature_statistics(delta_t_result)
+        average_profile = get_room_average_profile_dataframe(delta_t_result)
+
+        if measurement_dataframe.empty:
+            continue
+
+        if average_profile.empty:
+            mavg_delta_t = float("nan")
+        else:
+            mavg_delta_t = float(
+                average_profile["Average Temperature (°C)"].max()
+                - average_profile["Average Temperature (°C)"].min()
+            )
+
+        rows.append(
+            {
+                "Scenario": scenario_name,
+                "Folder": delta_t_result.get("source_folder", ""),
+                "Files processed": len(measurement_dataframe),
+                "Average ΔT": float(measurement_dataframe["ΔT = Max − Min (K or °C)"].mean()),
+                "Minimum ΔT": float(measurement_dataframe["ΔT = Max − Min (K or °C)"].min()),
+                "Maximum ΔT": float(measurement_dataframe["ΔT = Max − Min (K or °C)"].max()),
+                "Mavg ΔT": mavg_delta_t,
+                "Higher-end T": room_stats["highest_temperature"],
+                "Lower-end T": room_stats["lowest_temperature"],
+                "Room mean T": room_stats["room_mean_temperature"],
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def create_scenario_delta_t_summary_figure(scenario_summary: pd.DataFrame):
+    """Compare ΔT summary metrics across scenario folders."""
+    if scenario_summary.empty:
+        raise ValueError("No scenario summary data are available for plotting.")
+
+    fig, ax = plt.subplots(figsize=(10.2, 6.3))
+    x_values = range(len(scenario_summary))
+    ax.plot(x_values, scenario_summary["Average ΔT"], marker="o", linewidth=2.2, label="Average ΔT")
+    ax.plot(x_values, scenario_summary["Mavg ΔT"], marker="s", linewidth=2.2, label="Mavg ΔT")
+    ax.plot(x_values, scenario_summary["Maximum ΔT"], marker="^", linewidth=1.8, alpha=0.72, label="Maximum ΔT")
+    ax.set_xticks(list(x_values))
+    ax.set_xticklabels(scenario_summary["Scenario"], rotation=25, ha="right")
+    ax.set_ylabel("ΔT (K or °C)", fontsize=11, fontweight="bold")
+    ax.set_xlabel("Scenario folder", fontsize=11, fontweight="bold")
+    ax.set_title("Scenario comparison from folder-based ΔT processing", fontsize=13, fontweight="bold")
+    ax.grid(True, alpha=0.30, linewidth=0.8)
+    ax.legend(loc="best", fontsize=9, frameon=True)
+    fig.tight_layout()
+    return fig
+
+
+def create_scenario_mavg_profiles_figure(scenario_results: dict):
+    """Compare Mavg height-temperature profiles across scenario folders."""
+    if not scenario_results:
+        raise ValueError("No scenario results are available for plotting.")
+
+    fig, ax = plt.subplots(figsize=(9.2, 6.8))
+    plotted = 0
+    for scenario_name, delta_t_result in scenario_results.items():
+        average_dataframe = get_room_average_profile_dataframe(delta_t_result)
+        if average_dataframe.empty:
+            continue
+        ax.plot(
+            average_dataframe["Average Temperature (°C)"],
+            average_dataframe["Height (m)"],
+            marker="o",
+            markersize=4.8,
+            linewidth=2.0,
+            alpha=0.88,
+            label=scenario_name,
+        )
+        plotted += 1
+
+    if plotted == 0:
+        raise ValueError("No Mavg profiles could be created from the scenario folders.")
+
+    ax.set_xlabel("Average temperature (°C)", fontsize=11, fontweight="bold")
+    ax.set_ylabel("Height above floor (m)", fontsize=11, fontweight="bold")
+    ax.set_title("Mavg profile comparison across scenario folders", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=10)
+    ax.grid(True, alpha=0.30, linewidth=0.8)
+    ax.legend(loc="best", fontsize=9, ncol=2, frameon=True)
+    fig.tight_layout()
+    return fig
 
 def get_measurement_delta_t_dataframe(delta_t_result: dict) -> pd.DataFrame:
     """Convert measurement ΔT results into a display table.
@@ -1643,20 +2431,7 @@ def draw_measurement_delta_t_locations(ax, delta_t_result: dict):
 
 def create_measurement_delta_t_map_figure(pattern_name: str, delta_t_result: dict):
     """Create room measurement-location map with ΔT shown in brackets."""
-    if pattern_name == "Pattern 1":
-        positions, dimensions = get_pattern_1_positions()
-        dimension_function = draw_pattern_1_dimensions
-        show_occupants = True
-    elif pattern_name == "Pattern 2":
-        positions, dimensions = get_pattern_2_positions()
-        dimension_function = draw_pattern_2_dimensions
-        show_occupants = True
-    elif pattern_name == "Null Pattern":
-        positions, dimensions = {}, {}
-        dimension_function = None
-        show_occupants = False
-    else:
-        raise ValueError(f"Unknown occupancy pattern: {pattern_name}")
+    positions, dimensions, dimension_function, show_occupants, metadata = get_pattern_layout(pattern_name)
 
     fig, ax = plt.subplots(figsize=(10.4, 6.5))
     fig.patch.set_facecolor("white")
@@ -1833,29 +2608,30 @@ def measurement_delta_t_page() -> None:
     render_page_heading(
         "📊",
         "Measurement ΔT Upload",
-        "Upload Excel files for any measurement locations and calculate ΔT from the third column only.",
+        "Upload Excel files manually or read Excel files from a selected experiment-folder/subfolder and calculate ΔT from the third column only.",
     )
 
     confirmed_pattern = st.session_state.get("confirmed_occupancy_pattern")
 
     if not confirmed_pattern:
         st.warning(
-            "No occupancy pattern has been confirmed. Select and confirm a "
-            "Symmetry Pattern before uploading measurement files."
+            "No occupancy pattern has been confirmed. Select and confirm an "
+            "occupancy pattern before processing measurement files."
         )
         if st.button("Go to Occupancy Patterns", key="measurement_go_to_occupancy", type="primary"):
             go_to("occupancy")
         return
 
     st.session_state.setdefault("confirmed_measurement_delta_t", False)
+    st.session_state.setdefault("measurement_input_mode", "Manual M1–M12 upload")
 
     st.markdown(
         f"""
         <div class="result-banner">
             <b>Step 2 of 5</b><br>
-            Confirmed occupancy: Symmetry Pattern — <b>{confirmed_pattern}</b><br>
-            Upload Excel files for any available locations uploaded locations. The app reads only
-            column 3 and calculates ΔT = maximum temperature − minimum temperature.
+            Confirmed occupancy: <b>{confirmed_pattern}</b><br>
+            You can either upload files manually as before, or read Excel files from a local/Google Drive synced folder.
+            The app reads only column 3 and calculates ΔT = maximum temperature − minimum temperature.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1869,91 +2645,349 @@ def measurement_delta_t_page() -> None:
         plt.close(measurement_fig)
 
     st.caption(
-        "Height assumption for each uploaded file: first numeric reading in the third column is at 0.2 m, "
+        "Height assumption for each Excel file: first numeric reading in the third column is at 0.2 m, "
         "then 0.3 m, 0.4 m, and so on. Expected final reading is at 2.4 m. "
-        "The Richardson characteristic height is kept as 2.7 m by default. "
-        "You may upload only the locations you have; all 12 files are not mandatory."
+        "The Richardson characteristic height is kept as 2.7 m by default."
     )
 
-    st.markdown("### Upload available Excel files")
-    st.info(
-        "Upload one file per available measurement location. The first and second columns are ignored. "
-        "Only the third column is used for the temperature range and profile plots."
+    st.markdown("### Data source")
+    input_mode = st.radio(
+        "Choose how to provide measurement files",
+        options=["Manual M1–M12 upload", "Folder/Subfolder analyser"],
+        key="measurement_input_mode",
+        horizontal=True,
+        help="Manual upload keeps the existing workflow. Folder/Subfolder analyser is for a local folder or synced Google Drive folder containing scenario subfolders.",
     )
 
-    uploaded_files = {}
-    upload_columns = st.columns(3)
-
-    for index in range(1, 13):
-        measurement_label = f"M{index}"
-        with upload_columns[(index - 1) % 3]:
-            uploaded_files[measurement_label] = st.file_uploader(
-                f"{measurement_label} Excel file",
-                type=["xlsx", "xls"],
-                key=f"upload_{measurement_label.lower()}_excel",
-            )
-
-    calculate_left, calculate_centre, calculate_right = st.columns([1, 2.4, 1])
-    with calculate_centre:
-        calculate_delta_t = st.button(
-            "Calculate ΔT for uploaded files",
-            key="calculate_measurement_delta_t",
-            type="primary",
-            use_container_width=True,
+    if input_mode == "Manual M1–M12 upload":
+        st.markdown("### Upload available Excel files")
+        st.info(
+            "Upload one file per available measurement location. The first and second columns are ignored. "
+            "Only the third column is used for the temperature range and profile plots."
         )
 
-    if calculate_delta_t:
-        uploaded_only = {
-            measurement_label: uploaded_file
-            for measurement_label, uploaded_file in uploaded_files.items()
-            if uploaded_file is not None
-        }
+        uploaded_files = {}
+        upload_columns = st.columns(3)
 
-        if not uploaded_only:
-            st.error("Please upload at least one Excel file before calculating ΔT.")
-        else:
-            results = {}
-            errors = []
-
-            for measurement_label, uploaded_file in uploaded_only.items():
-                try:
-                    results[measurement_label] = read_delta_t_from_excel(uploaded_file)
-                except Exception as error:
-                    errors.append(f"{measurement_label}: {error}")
-
-            if errors:
-                st.session_state.confirmed_measurement_delta_t = False
-                st.session_state.pop("measurement_delta_t_result", None)
-                for error in errors:
-                    st.error(error)
-            else:
-                st.session_state.measurement_delta_t_result = {
-                    "pattern_name": confirmed_pattern,
-                    "height_start": MEASUREMENT_HEIGHT_START,
-                    "height_step": MEASUREMENT_HEIGHT_STEP,
-                    "expected_height_end": MEASUREMENT_EXPECTED_HEIGHT_END,
-                    "expected_count": MEASUREMENT_EXPECTED_COUNT,
-                    "richardson_total_height": RICHARDSON_TOTAL_HEIGHT,
-                    "results": results,
-                }
-                st.session_state.confirmed_measurement_delta_t = False
-                st.session_state.confirmed_richardson = False
-                st.session_state.confirmed_wells_riley = False
-                st.session_state.pop("ri_result", None)
-                st.session_state.pop("wr_result", None)
-                st.session_state.pop("confirmed_delta_map_plot", None)
-                st.session_state.pop("confirmed_individual_plot_label", None)
-                st.session_state.pop("confirmed_compare_plot_items", None)
-                st.session_state.pop("confirmed_all_vs_average_plot", None)
-                st.success(
-                    f"ΔT values calculated for {len(results)} uploaded location(s). "
-                    "Review the table, then confirm whichever plots you need."
+        for index in range(1, 13):
+            measurement_label = f"M{index}"
+            with upload_columns[(index - 1) % 3]:
+                uploaded_files[measurement_label] = st.file_uploader(
+                    f"{measurement_label} Excel file",
+                    type=["xlsx", "xls", "xlsm"],
+                    key=f"upload_{measurement_label.lower()}_excel",
                 )
+
+        calculate_left, calculate_centre, calculate_right = st.columns([1, 2.4, 1])
+        with calculate_centre:
+            calculate_delta_t = st.button(
+                "Calculate ΔT for uploaded files",
+                key="calculate_measurement_delta_t_manual",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if calculate_delta_t:
+            uploaded_only = {
+                measurement_label: uploaded_file
+                for measurement_label, uploaded_file in uploaded_files.items()
+                if uploaded_file is not None
+            }
+
+            if not uploaded_only:
+                st.error("Please upload at least one Excel file before calculating ΔT.")
+            else:
+                delta_t_result, errors = build_delta_t_result_from_file_mapping(
+                    uploaded_only,
+                    pattern_name=confirmed_pattern,
+                    data_source="Manual upload",
+                    scenario_name="Manual upload",
+                    source_folder="Manual Streamlit file upload",
+                )
+
+                if errors:
+                    st.session_state.confirmed_measurement_delta_t = False
+                    st.session_state.pop("measurement_delta_t_result", None)
+                    for error in errors:
+                        st.error(error)
+                else:
+                    st.session_state.measurement_delta_t_result = delta_t_result
+                    st.session_state.confirmed_measurement_delta_t = False
+                    st.session_state.confirmed_richardson = False
+                    st.session_state.confirmed_wells_riley = False
+                    st.session_state.pop("ri_result", None)
+                    st.session_state.pop("wr_result", None)
+                    st.session_state.pop("confirmed_delta_map_plot", None)
+                    st.session_state.pop("confirmed_individual_plot_label", None)
+                    st.session_state.pop("confirmed_compare_plot_items", None)
+                    st.session_state.pop("confirmed_all_vs_average_plot", None)
+                    st.success(
+                        f"ΔT values calculated for {len(delta_t_result['results'])} uploaded location(s). "
+                        "Review the table, then confirm whichever plots you need."
+                    )
+
+    else:
+        st.markdown("### Folder/Subfolder analyser")
+        st.info(
+            "Use this when your experiment folder is available on the same computer running Streamlit. "
+            "For Google Drive, sync or mount the Drive folder first, then paste the local folder path here. "
+            "Example structure: pattern/Null Pattern/M1.xlsx, pattern/Null Pattern/M2.xlsx, pattern/Pattern 1/M1.xlsx."
+        )
+
+        folder_col1, folder_col2 = st.columns([2.1, 1])
+        with folder_col1:
+            root_folder_text = st.text_input(
+                "Main experiment folder path",
+                value=st.session_state.get("measurement_root_folder", ""),
+                placeholder="Example: /Users/yourname/Library/CloudStorage/GoogleDrive.../pattern",
+                key="measurement_root_folder",
+                help="This must be a local folder path visible to the Python/Streamlit app. Browser-only Google Drive links cannot be scanned without the Drive API.",
+            )
+        with folder_col2:
+            recursive_excel_search = st.checkbox(
+                "Search inside nested folders",
+                value=False,
+                key="measurement_recursive_folder_search",
+                help="Normally keep this off. Turn it on only if each scenario subfolder contains deeper folders with Excel files.",
+            )
+
+        mapping_mode = st.radio(
+            "How should Excel files be assigned to M1–M12?",
+            options=["Match by file name M1–M12", "Use sorted file order as M1–M12"],
+            index=0,
+            key="measurement_folder_mapping_mode",
+            horizontal=True,
+            help="Recommended: name files M1.xlsx, M2.xlsx, ... M12.xlsx. If files do not contain M labels, use sorted file order.",
+        )
+
+        scan_left, scan_mid, scan_right = st.columns([1, 2.4, 1])
+        with scan_mid:
+            if st.button(
+                "Scan experiment folder",
+                key="scan_measurement_root_folder",
+                type="primary",
+                use_container_width=True,
+            ):
+                try:
+                    scenario_folders = get_subfolders_with_excel(
+                        root_folder_text,
+                        include_root=True,
+                        recursive_excel_search=recursive_excel_search,
+                    )
+                    st.session_state.measurement_scenario_folders = scenario_folders
+                    if not scenario_folders:
+                        st.warning("No Excel files were found in the root folder or its direct subfolders.")
+                    else:
+                        st.success(f"Found {len(scenario_folders)} scenario folder(s) containing Excel files.")
+                except Exception as error:
+                    st.session_state.measurement_scenario_folders = []
+                    st.error(str(error))
+
+        scenario_folders = st.session_state.get("measurement_scenario_folders", [])
+        if scenario_folders:
+            scenario_table = pd.DataFrame(scenario_folders)
+            scenario_display = scenario_table.rename(
+                columns={"scenario_name": "Scenario", "folder_path": "Folder path", "excel_count": "Excel files"}
+            )
+            st.dataframe(scenario_display, use_container_width=True, hide_index=True)
+
+            scenario_names = [row["scenario_name"] for row in scenario_folders]
+            selected_scenario_name = st.selectbox(
+                "Select one subfolder/scenario to use for this analysis",
+                options=scenario_names,
+                key="selected_measurement_scenario_folder",
+            )
+            selected_scenario = next(row for row in scenario_folders if row["scenario_name"] == selected_scenario_name)
+
+            folder_action_col1, folder_action_col2 = st.columns(2)
+            with folder_action_col1:
+                if st.button(
+                    "Calculate ΔT for selected subfolder",
+                    key="calculate_delta_t_selected_subfolder",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    try:
+                        excel_files = get_excel_files_in_folder(
+                            selected_scenario["folder_path"],
+                            recursive=recursive_excel_search,
+                        )
+                        file_mapping, mapping_warnings = map_excel_files_to_measurements(excel_files, mapping_mode)
+                        for warning in mapping_warnings:
+                            st.warning(warning)
+
+                        delta_t_result, errors = build_delta_t_result_from_file_mapping(
+                            file_mapping,
+                            pattern_name=confirmed_pattern,
+                            data_source="Folder/Subfolder analyser",
+                            scenario_name=selected_scenario_name,
+                            source_folder=selected_scenario["folder_path"],
+                        )
+
+                        if errors:
+                            st.session_state.confirmed_measurement_delta_t = False
+                            st.session_state.pop("measurement_delta_t_result", None)
+                            for error in errors:
+                                st.error(error)
+                        else:
+                            st.session_state.measurement_delta_t_result = delta_t_result
+                            st.session_state.confirmed_measurement_delta_t = False
+                            st.session_state.confirmed_richardson = False
+                            st.session_state.confirmed_wells_riley = False
+                            st.session_state.pop("ri_result", None)
+                            st.session_state.pop("wr_result", None)
+                            st.session_state.pop("confirmed_delta_map_plot", None)
+                            st.session_state.pop("confirmed_individual_plot_label", None)
+                            st.session_state.pop("confirmed_compare_plot_items", None)
+                            st.session_state.pop("confirmed_all_vs_average_plot", None)
+                            st.success(
+                                f"ΔT values calculated for {len(delta_t_result['results'])} file(s) inside '{selected_scenario_name}'."
+                            )
+                    except Exception as error:
+                        st.error(str(error))
+
+            with folder_action_col2:
+                if st.button(
+                    "Process all subfolders and compare overall results",
+                    key="process_all_scenario_subfolders",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    scenario_results = {}
+                    scenario_errors = []
+                    scenario_warnings = []
+
+                    for scenario_row in scenario_folders:
+                        try:
+                            excel_files = get_excel_files_in_folder(
+                                scenario_row["folder_path"],
+                                recursive=recursive_excel_search,
+                            )
+                            file_mapping, mapping_warnings = map_excel_files_to_measurements(excel_files, mapping_mode)
+                            scenario_warnings.extend([f"{scenario_row['scenario_name']}: {warning}" for warning in mapping_warnings])
+                            delta_t_result, errors = build_delta_t_result_from_file_mapping(
+                                file_mapping,
+                                pattern_name=confirmed_pattern,
+                                data_source="Folder/Subfolder analyser",
+                                scenario_name=scenario_row["scenario_name"],
+                                source_folder=scenario_row["folder_path"],
+                            )
+                            if errors:
+                                scenario_errors.extend([f"{scenario_row['scenario_name']}: {error}" for error in errors])
+                            else:
+                                scenario_results[scenario_row["scenario_name"]] = delta_t_result
+                        except Exception as error:
+                            scenario_errors.append(f"{scenario_row['scenario_name']}: {error}")
+
+                    st.session_state.scenario_comparison_result = scenario_results
+                    st.session_state.pop("confirmed_scenario_delta_t_summary_plot", None)
+                    st.session_state.pop("confirmed_scenario_mavg_profiles_plot", None)
+
+                    for warning in scenario_warnings:
+                        st.warning(warning)
+                    for error in scenario_errors:
+                        st.error(error)
+
+                    if scenario_results:
+                        st.success(f"Processed {len(scenario_results)} scenario folder(s). Overall comparison is shown below.")
+                    else:
+                        st.error("No scenario folder could be processed successfully.")
+
+    scenario_results = st.session_state.get("scenario_comparison_result", {})
+    if scenario_results:
+        st.markdown("---")
+        st.markdown("## Overall scenario comparison")
+        scenario_summary = build_scenario_summary_dataframe(scenario_results)
+        scenario_display = scenario_summary.copy()
+        numeric_columns = [
+            "Average ΔT",
+            "Minimum ΔT",
+            "Maximum ΔT",
+            "Mavg ΔT",
+            "Higher-end T",
+            "Lower-end T",
+            "Room mean T",
+        ]
+        for column_name in numeric_columns:
+            if column_name in scenario_display.columns:
+                scenario_display[column_name] = scenario_display[column_name].map(lambda value: f"{value:.4f}")
+        st.dataframe(scenario_display, use_container_width=True, hide_index=True)
+
+        scenario_tab1, scenario_tab2 = st.tabs(["ΔT scenario summary", "Mavg profile comparison"])
+        with scenario_tab1:
+            if st.button(
+                "Confirm and show scenario ΔT comparison",
+                key="confirm_scenario_delta_t_summary_plot_button",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.confirmed_scenario_delta_t_summary_plot = True
+            if st.session_state.get("confirmed_scenario_delta_t_summary_plot"):
+                scenario_fig = create_scenario_delta_t_summary_figure(scenario_summary)
+                st.pyplot(scenario_fig, use_container_width=True)
+                scenario_png = figure_to_png(scenario_fig)
+                plt.close(scenario_fig)
+                st.download_button(
+                    label="⬇ Download scenario ΔT comparison plot",
+                    data=scenario_png,
+                    file_name="atlice_scenario_delta_t_comparison.png",
+                    mime="image/png",
+                    key="download_scenario_delta_t_comparison_plot",
+                    use_container_width=True,
+                )
+
+        with scenario_tab2:
+            if st.button(
+                "Confirm and show Mavg profile comparison",
+                key="confirm_scenario_mavg_profiles_plot_button",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.confirmed_scenario_mavg_profiles_plot = True
+            if st.session_state.get("confirmed_scenario_mavg_profiles_plot"):
+                mavg_fig = create_scenario_mavg_profiles_figure(scenario_results)
+                st.pyplot(mavg_fig, use_container_width=True)
+                mavg_png = figure_to_png(mavg_fig)
+                plt.close(mavg_fig)
+                st.download_button(
+                    label="⬇ Download scenario Mavg profile comparison plot",
+                    data=mavg_png,
+                    file_name="atlice_scenario_mavg_profile_comparison.png",
+                    mime="image/png",
+                    key="download_scenario_mavg_profile_comparison_plot",
+                    use_container_width=True,
+                )
+
+        scenario_csv = scenario_summary.to_csv(index=False)
+        st.download_button(
+            label="⬇ Download overall scenario comparison CSV",
+            data=scenario_csv,
+            file_name="atlice_overall_scenario_comparison.csv",
+            mime="text/csv",
+            key="download_scenario_summary_csv",
+            use_container_width=True,
+        )
 
     delta_t_result = st.session_state.get("measurement_delta_t_result")
 
     if delta_t_result:
         st.markdown("---")
+        scenario_name = delta_t_result.get("scenario_name", "")
+        source_folder = delta_t_result.get("source_folder", "")
+        data_source = delta_t_result.get("data_source", "Manual upload")
+        if scenario_name or source_folder:
+            st.markdown(
+                f"""
+                <div class="result-banner">
+                    <b>Active measurement dataset</b><br>
+                    Data source: <b>{data_source}</b><br>
+                    Scenario/subfolder: <b>{scenario_name if scenario_name else 'Not specified'}</b><br>
+                    Source folder: <b>{source_folder if source_folder else 'Not applicable'}</b>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
         st.markdown("## Calculated ΔT values")
 
         result_dataframe = get_measurement_delta_t_dataframe(delta_t_result)
@@ -1991,7 +3025,7 @@ def measurement_delta_t_page() -> None:
         if not unexpected_counts.empty:
             st.warning(
                 f"Expected {MEASUREMENT_EXPECTED_COUNT} numeric readings per file for 0.2 m to 2.4 m at 0.1 m spacing. "
-                "Some uploaded files have a different count. ΔT and plots are still calculated using all numeric values in the third column."
+                "Some files have a different count. ΔT and plots are still calculated using all numeric values in the third column."
             )
 
         st.markdown("### Plot windows")
@@ -2011,7 +3045,7 @@ def measurement_delta_t_page() -> None:
                 """
                 <div class="section-card">
                     <h3>ΔT map</h3>
-                    <p>Shows the selected room layout with each uploaded measurement location labelled as M# (ΔT).</p>
+                    <p>Shows the selected room layout with each processed measurement location labelled as M# (ΔT).</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -2047,7 +3081,7 @@ def measurement_delta_t_page() -> None:
             selected_single_item = st.selectbox(
                 "Select one profile to display",
                 options=single_options,
-                help="Choose an uploaded measurement location or Mavg, then press Confirm.",
+                help="Choose a processed measurement location or Mavg, then press Confirm.",
                 key="selected_single_profile_plot",
             )
 
@@ -2105,7 +3139,7 @@ def measurement_delta_t_page() -> None:
                 "Select locations or Mavg to compare",
                 options=all_options,
                 default=default_options,
-                help="M1–M12 are selectable. Locations without uploaded data are skipped. Mavg is the average profile from all uploaded files.",
+                help="M1–M12 are selectable. Locations without processed data are skipped. Mavg is the average profile from all processed files.",
                 key="selected_compare_measurement_plots",
             )
 
@@ -2115,7 +3149,7 @@ def measurement_delta_t_page() -> None:
             ]
             if missing_selected:
                 st.warning(
-                    "These selected locations do not have uploaded data and will be skipped: "
+                    "These selected locations do not have processed data and will be skipped: "
                     + ", ".join(missing_selected)
                 )
 
@@ -2130,7 +3164,7 @@ def measurement_delta_t_page() -> None:
                     if item == "Mavg" or item in delta_t_result["results"]
                 ]
                 if not valid_items:
-                    st.error("Select at least one uploaded location or Mavg before confirming.")
+                    st.error("Select at least one processed location or Mavg before confirming.")
                 else:
                     st.session_state.confirmed_compare_plot_items = valid_items
 
@@ -2153,7 +3187,7 @@ def measurement_delta_t_page() -> None:
                 st.markdown(
                     f"""
                     <div class="result-banner">
-                        <b>Temperature summary from uploaded locations</b><br>
+                        <b>Temperature summary from processed locations</b><br>
                         Higher-end T: <b>{room_stats['highest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
                         Lower-end T: <b>{room_stats['lowest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
                         Room mean T: <b>{room_stats['room_mean_temperature']:.3f} °C</b>
@@ -2167,7 +3201,7 @@ def measurement_delta_t_page() -> None:
                 """
                 <div class="section-card">
                     <h3>All individuals vs Mavg</h3>
-                    <p>Shows every uploaded measurement-location profile together with the Mavg room-average profile.</p>
+                    <p>Shows every processed measurement-location profile together with the Mavg room-average profile.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -2197,7 +3231,7 @@ def measurement_delta_t_page() -> None:
                 st.markdown(
                     f"""
                     <div class="result-banner">
-                        <b>Temperature summary from uploaded locations</b><br>
+                        <b>Temperature summary from processed locations</b><br>
                         Higher-end T: <b>{room_stats['highest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
                         Lower-end T: <b>{room_stats['lowest_temperature']:.3f} °C</b> &nbsp; | &nbsp;
                         Room mean T: <b>{room_stats['room_mean_temperature']:.3f} °C</b>
@@ -2210,6 +3244,9 @@ def measurement_delta_t_page() -> None:
             "ATLiCE — MEASUREMENT DELTA T RESULTS",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "",
+            f"Data source: {data_source}",
+            f"Scenario/subfolder: {scenario_name if scenario_name else 'Not specified'}",
+            f"Source folder: {source_folder if source_folder else 'Not applicable'}",
             "Reading rule: third Excel column only; first and second columns ignored.",
             "Height assumption: first numeric reading = 0.2 m; subsequent readings increase by 0.1 m; expected final height = 2.4 m.",
             f"Richardson characteristic height used later: {RICHARDSON_TOTAL_HEIGHT:.2f} m.",
@@ -3003,6 +4040,19 @@ Local infection probability: {result['p_local'] * 100:.4f}%
 
 def get_pattern_configuration(pattern_name: str) -> dict:
     """Return the selected arrangement and its clear-distance summary."""
+    generated_metadata = get_generated_pattern_metadata(pattern_name)
+    if generated_metadata is not None:
+        return {
+            "group": generated_metadata.get("group", "Pattern Analyser"),
+            "arrangement": generated_metadata.get("arrangement", "Generated occupancy pattern"),
+            "spacing_label": generated_metadata.get("spacing_label", "Minimum requested clear spacing"),
+            "spacing_value": generated_metadata.get("spacing_value", "Not specified"),
+            "separation_label": generated_metadata.get("separation_label", "Generated layout type"),
+            "separation_value": generated_metadata.get("separation_value", pattern_name),
+            "side_clearance": generated_metadata.get("side_clearance", "Generated by Pattern Analyser"),
+            "door_clearance": generated_metadata.get("door_clearance", "Generated by Pattern Analyser"),
+        }
+
     if pattern_name == "Pattern 1":
         return {
             "group": "Symmetry Pattern",
@@ -3039,16 +4089,16 @@ def get_pattern_configuration(pattern_name: str) -> dict:
     }
 
 
-
 def get_load_summary(pattern_name=None) -> dict:
     """Calculate the sensible-load airflow used in the study summary.
 
-    Null Pattern contains no human heat loads, so the automatic occupant-load
-    airflow summary is zero.
+    For Pattern Analyser layouts, occupant count and heat per load are taken
+    from the confirmed generated pattern metadata.
     """
-    if pattern_name == "Null Pattern":
-        occupants = 0
-        heat_per_occupant = 0
+    if pattern_name:
+        heat_summary = get_pattern_heat_summary(pattern_name)
+        occupants = int(heat_summary["occupant_count"])
+        heat_per_occupant = float(heat_summary["heat_per_person"])
     else:
         occupants = 6
         heat_per_occupant = HUMAN_HEAT_LOAD
@@ -3347,6 +4397,9 @@ def reset_complete_analysis() -> None:
     keys_to_remove = [
         "occupancy_preview_pattern",
         "confirmed_occupancy_pattern",
+        "confirmed_pattern_analyser_metadata",
+        "pattern_analyser_candidates",
+        "selected_pattern_analyser_candidate",
         "measurement_delta_t_result",
         "ri_result",
         "wr_result",
@@ -3520,7 +4573,7 @@ def complete_report_page() -> None:
         st.download_button(
             label="⬇ Download formatted HTML report",
             data=report_html.encode("utf-8"),
-            file_name=f"ATLiCE_{pattern_name.replace(' ', '_')}_complete_report.html",
+            file_name=f"ATLiCE_{pattern_name.replace(' ', '_').replace('—', '-')}_complete_report.html",
             mime="text/html",
             key="download_complete_html_report",
             use_container_width=True,
@@ -3529,7 +4582,7 @@ def complete_report_page() -> None:
         st.download_button(
             label="⬇ Download text report",
             data=report_text,
-            file_name=f"ATLiCE_{pattern_name.replace(' ', '_')}_complete_report.txt",
+            file_name=f"ATLiCE_{pattern_name.replace(' ', '_').replace('—', '-')}_complete_report.txt",
             mime="text/plain",
             key="download_complete_text_report",
             use_container_width=True,
