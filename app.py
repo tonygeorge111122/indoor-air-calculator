@@ -2079,6 +2079,19 @@ def read_delta_t_from_excel(excel_source) -> dict:
 EXCEL_EXTENSIONS = {".xlsx", ".xls", ".xlsm"}
 
 
+def natural_excel_sort_key(path_obj) -> list:
+    """Sort Excel files in human order so M1, M2, ... M12 stay in the correct sequence."""
+    name = Path(path_obj).stem.lower()
+    parts = re.split(r"(\d+)", name)
+    key = []
+    for part in parts:
+        if part.isdigit():
+            key.append(int(part))
+        else:
+            key.append(part)
+    return key
+
+
 def extract_measurement_label_from_filename(file_name: str):
     """Return M1–M12 if the file name contains a clear measurement label."""
     stem = Path(file_name).stem
@@ -2106,7 +2119,7 @@ def get_excel_files_in_folder(folder_path, recursive: bool = False) -> list[Path
     for item in iterator:
         if item.is_file() and item.suffix.lower() in EXCEL_EXTENSIONS and not item.name.startswith("~$"):
             files.append(item)
-    return sorted(files, key=lambda item: item.name.lower())
+    return sorted(files, key=natural_excel_sort_key)
 
 
 def get_subfolders_with_excel(root_folder, include_root: bool = True, recursive_excel_search: bool = False) -> list[dict]:
@@ -2153,11 +2166,12 @@ def map_excel_files_to_measurements(excel_files: list[Path], mapping_mode: str) 
     warnings = []
     file_mapping = {}
 
-    if mapping_mode == "Use sorted file order as M1–M12":
-        for index, excel_file in enumerate(sorted(excel_files, key=lambda item: item.name.lower())[:12], start=1):
+    if mapping_mode == "Use selected-folder file order as M1–M12":
+        ordered_files = sorted(excel_files, key=natural_excel_sort_key)
+        for index, excel_file in enumerate(ordered_files[:12], start=1):
             file_mapping[f"M{index}"] = excel_file
         if len(excel_files) > 12:
-            warnings.append("More than 12 Excel files were found. Only the first 12 files in sorted order were used.")
+            warnings.append("More than 12 Excel files were found. Only the first 12 files in natural sorted order were used as M1–M12.")
         return file_mapping, warnings
 
     unmatched = []
@@ -2179,6 +2193,21 @@ def map_excel_files_to_measurements(excel_files: list[Path], mapping_mode: str) 
         )
 
     return dict(sorted(file_mapping.items(), key=lambda item: int(item[0].replace("M", "")))), warnings
+
+
+def get_file_mapping_dataframe(file_mapping: dict) -> pd.DataFrame:
+    """Return a readable table showing exactly which file is mapped to M1–M12."""
+    rows = []
+    for measurement_label, excel_file in sorted(file_mapping.items(), key=lambda item: int(item[0].replace("M", ""))):
+        excel_path = Path(str(excel_file))
+        rows.append(
+            {
+                "Measurement": measurement_label,
+                "Assigned Excel file": excel_path.name,
+                "Folder": str(excel_path.parent),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def build_delta_t_result_from_file_mapping(
@@ -2729,9 +2758,11 @@ def measurement_delta_t_page() -> None:
     else:
         st.markdown("### Folder/Subfolder analyser")
         st.info(
-            "Use this when your experiment folder is available on the same computer running Streamlit. "
-            "For Google Drive, sync or mount the Drive folder first, then paste the local folder path here. "
-            "Example structure: pattern/Null Pattern/M1.xlsx, pattern/Null Pattern/M2.xlsx, pattern/Pattern 1/M1.xlsx."
+            "Use this when your experiment folder is available on the same computer or server running Streamlit. "
+            "For Google Drive, share the folder with every collaborator who needs access, then sync or mount that shared Drive folder on the computer/server running this app. "
+            "A browser-only Google Drive link cannot be scanned by this local folder reader. "
+            "Example structure: pattern/Null Pattern/file1.xlsx, pattern/Null Pattern/file2.xlsx, pattern/Pattern 1/file1.xlsx. "
+            "When the selected-folder file-order option is used, the first Excel file becomes M1, the second becomes M2, and so on up to M12."
         )
 
         folder_col1, folder_col2 = st.columns([2.1, 1])
@@ -2741,7 +2772,7 @@ def measurement_delta_t_page() -> None:
                 value=st.session_state.get("measurement_root_folder", ""),
                 placeholder="Example: /Users/yourname/Library/CloudStorage/GoogleDrive.../pattern",
                 key="measurement_root_folder",
-                help="This must be a local folder path visible to the Python/Streamlit app. Browser-only Google Drive links cannot be scanned without the Drive API.",
+                help="This must be a local folder path visible to the Python/Streamlit app. Shared Google Drive folders must be synced/mounted locally or accessed through a future Google Drive API connection.",
             )
         with folder_col2:
             recursive_excel_search = st.checkbox(
@@ -2753,11 +2784,11 @@ def measurement_delta_t_page() -> None:
 
         mapping_mode = st.radio(
             "How should Excel files be assigned to M1–M12?",
-            options=["Match by file name M1–M12", "Use sorted file order as M1–M12"],
+            options=["Use selected-folder file order as M1–M12", "Match by file name M1–M12"],
             index=0,
             key="measurement_folder_mapping_mode",
             horizontal=True,
-            help="Recommended: name files M1.xlsx, M2.xlsx, ... M12.xlsx. If files do not contain M labels, use sorted file order.",
+            help="Default for your workflow: files inside the selected subfolder are sorted naturally, then assigned as first file = M1, second file = M2, ... up to M12. Use file-name matching only when your files are explicitly named M1.xlsx to M12.xlsx.",
         )
 
         scan_left, scan_mid, scan_right = st.columns([1, 2.4, 1])
@@ -2798,6 +2829,21 @@ def measurement_delta_t_page() -> None:
                 key="selected_measurement_scenario_folder",
             )
             selected_scenario = next(row for row in scenario_folders if row["scenario_name"] == selected_scenario_name)
+
+            try:
+                preview_excel_files = get_excel_files_in_folder(
+                    selected_scenario["folder_path"],
+                    recursive=recursive_excel_search,
+                )
+                preview_mapping, preview_warnings = map_excel_files_to_measurements(preview_excel_files, mapping_mode)
+                if preview_mapping:
+                    st.markdown("#### M1–M12 file mapping preview")
+                    st.caption("This preview shows exactly how the selected subfolder will be mapped before calculation. With the file-order option, first file → M1, second file → M2, and so on.")
+                    st.dataframe(get_file_mapping_dataframe(preview_mapping), use_container_width=True, hide_index=True)
+                for warning in preview_warnings:
+                    st.warning(warning)
+            except Exception as preview_error:
+                st.warning(f"Could not create file-mapping preview: {preview_error}")
 
             folder_action_col1, folder_action_col2 = st.columns(2)
             with folder_action_col1:
